@@ -10,7 +10,9 @@ from converters import UniversalConverter
 app = Flask(__name__)
 
 # Initialize database on first run
-if not os.path.exists('agents.db'):
+# On Vercel, database is in /tmp and needs to be initialized on every cold start
+db_path = db.DB_FILE if hasattr(db, 'DB_FILE') else 'agents.db'
+if not os.path.exists(db_path):
     db.init_db()
     print("Database initialized with seed data")
 

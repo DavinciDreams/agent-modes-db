@@ -4,7 +4,12 @@ import os
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_FILE = 'agents.db'
+# Determine database file path based on environment
+# On Vercel serverless functions, only /tmp is writable
+if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+    DB_FILE = '/tmp/modes.db'
+else:
+    DB_FILE = 'agents.db'
 
 @contextmanager
 def get_db():
