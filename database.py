@@ -26,12 +26,25 @@ def get_db():
         conn.close()
 
 def init_db():
-    """Initialize database with schema"""
+    """Initialize database with schema and apply all migrations"""
     with open('schema.sql', 'r') as f:
         schema = f.read()
 
     with get_db() as conn:
         conn.executescript(schema)
+
+    # Apply all migrations in order
+    migrations = [
+        '001_add_file_upload_support.sql',
+        '002_add_format_conversions.sql',
+        '003_add_agent_cards.sql'
+    ]
+    
+    for migration_file in migrations:
+        try:
+            apply_migration(migration_file)
+        except Exception as e:
+            print(f"Warning: Failed to apply migration {migration_file}: {e}")
 
     # Add seed data
     seed_builtin_templates()
