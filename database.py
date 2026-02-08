@@ -207,6 +207,12 @@ def convert_schema_for_postgres(schema):
     
     # Replace CURRENT_TIMESTAMP with CURRENT_TIMESTAMP (same in both)
     
+    # Replace boolean default values: DEFAULT 0 -> DEFAULT FALSE, DEFAULT 1 -> DEFAULT TRUE
+    # Postgres requires boolean literals (FALSE/TRUE) instead of integers (0/1) for boolean columns
+    import re
+    schema = re.sub(r'DEFAULT\s+0\b', 'DEFAULT FALSE', schema)
+    schema = re.sub(r'DEFAULT\s+1\b', 'DEFAULT TRUE', schema)
+    
     # Replace ? with %s for parameter placeholders
     # Note: This is a simple replacement and may not work for all cases
     # Better to use parameterized queries in the actual code
@@ -253,6 +259,12 @@ def convert_migration_for_postgres(migration_sql):
     """Convert SQLite migration to Postgres-compatible migration"""
     # Replace AUTOINCREMENT with SERIAL
     migration_sql = migration_sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+    
+    # Replace boolean default values: DEFAULT 0 -> DEFAULT FALSE, DEFAULT 1 -> DEFAULT TRUE
+    # Postgres requires boolean literals (FALSE/TRUE) instead of integers (0/1) for boolean columns
+    import re
+    migration_sql = re.sub(r'DEFAULT\s+0\b', 'DEFAULT FALSE', migration_sql)
+    migration_sql = re.sub(r'DEFAULT\s+1\b', 'DEFAULT TRUE', migration_sql)
     
     # Handle ALTER TABLE ADD COLUMN for Postgres
     # Postgres doesn't support IF NOT EXISTS for ADD COLUMN
