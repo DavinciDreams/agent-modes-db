@@ -1,5 +1,6 @@
 -- Migration 001: Add File Upload Support
 -- This migration adds the file_uploads table and new columns to agent_templates and custom_agents
+-- Note: INTEGER PRIMARY KEY AUTOINCREMENT will be converted to SERIAL PRIMARY KEY for Postgres
 
 -- Create file_uploads table
 CREATE TABLE IF NOT EXISTS file_uploads (
@@ -20,8 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_file_uploads_format ON file_uploads(file_format);
 
 -- Add new columns to agent_templates
 -- Note: SQLite doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN
--- We'll check if the column exists before adding it
--- For idempotency, we'll use a try-catch approach in the migration function
+-- Postgres doesn't support IF NOT EXISTS for ADD COLUMN either
+-- The migration function will handle idempotency with try-catch
 
 ALTER TABLE agent_templates ADD COLUMN source_format TEXT;  -- 'claude', 'roo', 'custom', 'manual'
 ALTER TABLE agent_templates ADD COLUMN source_file_id INTEGER;  -- Reference to file_uploads

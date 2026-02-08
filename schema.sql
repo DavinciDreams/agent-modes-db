@@ -1,4 +1,5 @@
 -- Agent Templates Table
+-- Note: Uses INTEGER PRIMARY KEY AUTOINCREMENT for SQLite, will be converted to SERIAL for Postgres
 CREATE TABLE IF NOT EXISTS agent_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

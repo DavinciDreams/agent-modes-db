@@ -1,5 +1,6 @@
 -- Migration 003: Add Agent Cards Support
 -- This migration adds the agent_cards table for storing generated agent cards
+-- Note: INTEGER PRIMARY KEY AUTOINCREMENT will be converted to SERIAL PRIMARY KEY for Postgres
 
 -- Create agent_cards table
 CREATE TABLE IF NOT EXISTS agent_cards (

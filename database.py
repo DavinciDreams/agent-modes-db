@@ -4,34 +4,142 @@ import os
 from datetime import datetime
 from contextlib import contextmanager
 
-# Determine database file path based on environment
+# Check if Postgres connection info is available
+POSTGRES_URL = os.environ.get('POSTGRES_URL') or os.environ.get('DATABASE_URL')
+USE_POSTGRES = bool(POSTGRES_URL)
+
+# Determine database file path based on environment (only for SQLite)
 # On Vercel serverless functions, only /tmp is writable
 if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
     DB_FILE = '/tmp/modes.db'
 else:
     DB_FILE = 'agents.db'
 
+# Import psycopg2 only if Postgres is available
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from psycopg2 import sql
+        POSTGRES_AVAILABLE = True
+    except ImportError:
+        print("Warning: psycopg2 not installed, falling back to SQLite")
+        USE_POSTGRES = False
+        POSTGRES_AVAILABLE = False
+else:
+    POSTGRES_AVAILABLE = False
+
+# Database type constants
+DB_TYPE_POSTGRES = 'postgres'
+DB_TYPE_SQLITE = 'sqlite'
+
+def get_db_type():
+    """Get the current database type being used"""
+    return DB_TYPE_POSTGRES if USE_POSTGRES else DB_TYPE_SQLITE
+
+def get_placeholder():
+    """Get the appropriate placeholder for the current database"""
+    return '%s' if USE_POSTGRES else '?'
+
+def convert_bool(value):
+    """Convert boolean to appropriate database value"""
+    if USE_POSTGRES:
+        # Postgres handles booleans natively
+        return value
+    else:
+        # SQLite uses 0/1 for booleans
+        return 1 if value else 0
+
+def parse_bool(value):
+    """Parse boolean from database value"""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes', 'on')
+    return bool(value)
+
 @contextmanager
 def get_db():
     """Context manager for database connections"""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+    if USE_POSTGRES and POSTGRES_AVAILABLE:
+        conn = psycopg2.connect(POSTGRES_URL, cursor_factory=RealDictCursor)
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+def get_last_insert_id(conn, cursor):
+    """Get the last inserted ID for the current database type"""
+    if USE_POSTGRES:
+        # For Postgres, we need to use RETURNING clause or fetch from cursor
+        # This is handled by using RETURNING in INSERT statements
+        # For backward compatibility, we'll try to get the OID
+        # Note: This is not reliable for all cases, so prefer RETURNING
+        return cursor.lastrowid if hasattr(cursor, 'lastrowid') else None
+    else:
+        return cursor.lastrowid
+
+def execute_insert(conn, query, params):
+    """Execute an INSERT query and return the inserted ID"""
+    cursor = conn.cursor()
+    
+    if USE_POSTGRES:
+        # For Postgres, add RETURNING clause to get the ID
+        if 'RETURNING' not in query.upper():
+            # Extract the table name from the INSERT statement
+            query_upper = query.upper()
+            into_pos = query_upper.find('INTO ') + 5
+            values_pos = query_upper.find(' VALUES')
+            table_name = query[into_pos:values_pos].strip()
+            
+            # Add RETURNING id clause
+            query = query.rstrip(';') + ' RETURNING id;'
+        
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        if result:
+            return result['id']
+    else:
+        cursor.execute(query, params)
+        return cursor.lastrowid
+    
+    return None
 
 def init_db():
     """Initialize database with schema and apply all migrations"""
     with open('schema.sql', 'r') as f:
         schema = f.read()
 
+    # Convert schema for Postgres if needed
+    if USE_POSTGRES:
+        schema = convert_schema_for_postgres(schema)
+
     with get_db() as conn:
-        conn.executescript(schema)
+        if USE_POSTGRES:
+            # For Postgres, execute each statement separately
+            execute_sql_script(conn, schema)
+        else:
+            # For SQLite, use executescript
+            conn.executescript(schema)
 
     # Apply all migrations in order
     migrations = [
@@ -48,6 +156,62 @@ def init_db():
 
     # Add seed data
     seed_builtin_templates()
+
+def execute_sql_script(conn, script):
+    """
+    Execute a SQL script with multiple statements (for Postgres)
+    
+    Args:
+        conn: Database connection
+        script: SQL script with multiple statements
+    """
+    cursor = conn.cursor()
+    
+    # Split the script into individual statements
+    # Remove comments and empty lines
+    statements = []
+    current_statement = []
+    
+    for line in script.split('\n'):
+        # Skip comments
+        stripped_line = line.strip()
+        if stripped_line.startswith('--'):
+            continue
+        
+        current_statement.append(line)
+        
+        # Check if the line ends with a semicolon (end of statement)
+        if stripped_line.endswith(';'):
+            statement = '\n'.join(current_statement).strip()
+            if statement:
+                statements.append(statement)
+            current_statement = []
+    
+    # Execute each statement
+    for statement in statements:
+        try:
+            cursor.execute(statement)
+        except Exception as e:
+            # Ignore errors for statements that already exist (e.g., CREATE TABLE IF NOT EXISTS)
+            if 'already exists' in str(e).lower():
+                continue
+            raise e
+
+def convert_schema_for_postgres(schema):
+    """Convert SQLite schema to Postgres-compatible schema"""
+    # Replace AUTOINCREMENT with SERIAL
+    schema = schema.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+    
+    # Replace BOOLEAN with BOOLEAN (same in both, but ensure proper handling)
+    # SQLite doesn't have native BOOLEAN, but we handle it in Python
+    
+    # Replace CURRENT_TIMESTAMP with CURRENT_TIMESTAMP (same in both)
+    
+    # Replace ? with %s for parameter placeholders
+    # Note: This is a simple replacement and may not work for all cases
+    # Better to use parameterized queries in the actual code
+    
+    return schema
 
 def apply_migration(migration_file):
     """
@@ -66,15 +230,37 @@ def apply_migration(migration_file):
     with open(migration_path, 'r') as f:
         migration_sql = f.read()
     
+    # Convert migration for Postgres if needed
+    if USE_POSTGRES:
+        migration_sql = convert_migration_for_postgres(migration_sql)
+    
     with get_db() as conn:
         try:
-            conn.executescript(migration_sql)
+            if USE_POSTGRES:
+                # For Postgres, execute each statement separately
+                execute_sql_script(conn, migration_sql)
+            else:
+                # For SQLite, use executescript
+                conn.executescript(migration_sql)
             return True
         except Exception as e:
             # If error is about duplicate column, it's already migrated (idempotent)
-            if 'duplicate column' in str(e).lower():
+            if 'duplicate column' in str(e).lower() or 'column' in str(e).lower() and 'already exists' in str(e).lower():
                 return True
             raise e
+
+def convert_migration_for_postgres(migration_sql):
+    """Convert SQLite migration to Postgres-compatible migration"""
+    # Replace AUTOINCREMENT with SERIAL
+    migration_sql = migration_sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+    
+    # Handle ALTER TABLE ADD COLUMN for Postgres
+    # Postgres doesn't support IF NOT EXISTS for ADD COLUMN
+    # The execute_sql_script function handles idempotency with try-catch
+    
+    return migration_sql
+    
+    return migration_sql
 
 def seed_builtin_templates():
     """Add example builtin templates"""
@@ -115,14 +301,17 @@ def seed_builtin_templates():
         for template in templates:
             # Check if template already exists
             existing = conn.execute(
-                'SELECT id FROM agent_templates WHERE name = ? AND is_builtin = 1',
-                (template['name'],)
+                'SELECT id FROM agent_templates WHERE name = %s AND is_builtin = %s' if USE_POSTGRES else 'SELECT id FROM agent_templates WHERE name = ? AND is_builtin = 1',
+                (template['name'], convert_bool(True)) if USE_POSTGRES else (template['name'],)
             ).fetchone()
 
             if not existing:
                 conn.execute(
                     '''INSERT INTO agent_templates (name, description, category, is_builtin)
+                       VALUES (%s, %s, %s, %s)''' if USE_POSTGRES else
+                    '''INSERT INTO agent_templates (name, description, category, is_builtin)
                        VALUES (?, ?, ?, ?)''',
+                    (template['name'], template['description'], template['category'], convert_bool(True)) if USE_POSTGRES else
                     (template['name'], template['description'], template['category'], template['is_builtin'])
                 )
 
@@ -138,10 +327,8 @@ def get_all_templates():
 def get_template_by_id(template_id):
     """Get specific template by ID"""
     with get_db() as conn:
-        row = conn.execute(
-            'SELECT * FROM agent_templates WHERE id = ?',
-            (template_id,)
-        ).fetchone()
+        query = 'SELECT * FROM agent_templates WHERE id = %s' if USE_POSTGRES else 'SELECT * FROM agent_templates WHERE id = ?'
+        row = conn.execute(query, (template_id,)).fetchone()
         return dict(row) if row else None
 
 def create_template(name, description, category, is_builtin=False, source_format=None, source_file_id=None, is_imported=False):
@@ -161,12 +348,21 @@ def create_template(name, description, category, is_builtin=False, source_format
         int: The ID of the created template
     """
     with get_db() as conn:
-        cursor = conn.execute(
-            '''INSERT INTO agent_templates (name, description, category, is_builtin, source_format, source_file_id, is_imported)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
-            (name, description, category, is_builtin, source_format, source_file_id, is_imported)
-        )
-        template_id = cursor.lastrowid
+        if USE_POSTGRES:
+            query = '''INSERT INTO agent_templates (name, description, category, is_builtin, source_format, source_file_id, is_imported)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id'''
+            params = (name, description, category, convert_bool(is_builtin), source_format, source_file_id, convert_bool(is_imported))
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            template_id = result['id']
+        else:
+            query = '''INSERT INTO agent_templates (name, description, category, is_builtin, source_format, source_file_id, is_imported)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)'''
+            params = (name, description, category, is_builtin, source_format, source_file_id, is_imported)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            template_id = cursor.lastrowid
     
     # Auto-generate agent card for the new template
     # _generate_and_store_agent_card("template", template_id)    
@@ -190,24 +386,25 @@ def update_template(template_id, name, description, category, source_format=None
     """
     with get_db() as conn:
         # Build dynamic update query based on provided parameters
-        update_fields = ['name = ?', 'description = ?', 'category = ?', 'updated_at = CURRENT_TIMESTAMP']
+        ph = '%s' if USE_POSTGRES else '?'
+        update_fields = [f'name = {ph}', f'description = {ph}', f'category = {ph}', 'updated_at = CURRENT_TIMESTAMP']
         params = [name, description, category]
         
         if source_format is not None:
-            update_fields.append('source_format = ?')
+            update_fields.append(f'source_format = {ph}')
             params.append(source_format)
         
         if source_file_id is not None:
-            update_fields.append('source_file_id = ?')
+            update_fields.append(f'source_file_id = {ph}')
             params.append(source_file_id)
         
         if is_imported is not None:
-            update_fields.append('is_imported = ?')
-            params.append(is_imported)
+            update_fields.append(f'is_imported = {ph}')
+            params.append(convert_bool(is_imported) if USE_POSTGRES else is_imported)
         
         params.append(template_id)
         
-        query = f"UPDATE agent_templates SET {', '.join(update_fields)} WHERE id = ?"
+        query = f"UPDATE agent_templates SET {', '.join(update_fields)} WHERE id = {ph}"
         conn.execute(query, params)
     
     # Auto-regenerate agent card for the updated template
@@ -218,15 +415,16 @@ def delete_template(template_id):
     """Delete template (only if not builtin)"""
     with get_db() as conn:
         # Check if builtin
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT is_builtin FROM agent_templates WHERE id = ?',
+            f'SELECT is_builtin FROM agent_templates WHERE id = {ph}',
             (template_id,)
         ).fetchone()
 
-        if row and row['is_builtin']:
+        if row and parse_bool(row['is_builtin']):
             raise ValueError("Cannot delete builtin templates")
 
-        conn.execute('DELETE FROM agent_templates WHERE id = ?', (template_id,))
+        conn.execute(f'DELETE FROM agent_templates WHERE id = {ph}', (template_id,))
         return True
 
 # Agent Configurations CRUD
@@ -244,11 +442,12 @@ def get_all_configurations():
 def get_configuration_by_id(config_id):
     """Get specific configuration by ID"""
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            '''SELECT c.*, t.name as template_name
+            f'''SELECT c.*, t.name as template_name
                FROM agent_configurations c
                LEFT JOIN agent_templates t ON c.template_id = t.id
-               WHERE c.id = ?''',
+               WHERE c.id = {ph}''',
             (config_id,)
         ).fetchone()
         return dict(row) if row else None
@@ -256,12 +455,21 @@ def get_configuration_by_id(config_id):
 def create_configuration(name, template_id, config_json):
     """Create new agent configuration"""
     with get_db() as conn:
-        cursor = conn.execute(
-            '''INSERT INTO agent_configurations (name, template_id, config_json)
-               VALUES (?, ?, ?)''',
-            (name, template_id, json.dumps(config_json) if isinstance(config_json, dict) else config_json)
-        )
-        config_id = cursor.lastrowid
+        if USE_POSTGRES:
+            query = '''INSERT INTO agent_configurations (name, template_id, config_json)
+                       VALUES (%s, %s, %s) RETURNING id'''
+            params = (name, template_id, json.dumps(config_json) if isinstance(config_json, dict) else config_json)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            config_id = result['id']
+        else:
+            query = '''INSERT INTO agent_configurations (name, template_id, config_json)
+                       VALUES (?, ?, ?)'''
+            params = (name, template_id, json.dumps(config_json) if isinstance(config_json, dict) else config_json)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            config_id = cursor.lastrowid
     
     # Auto-generate agent card for the new configuration
     _generate_and_store_agent_card('configuration', config_id)
@@ -271,10 +479,11 @@ def create_configuration(name, template_id, config_json):
 def update_configuration(config_id, name, template_id, config_json):
     """Update existing configuration"""
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         conn.execute(
-            '''UPDATE agent_configurations
-               SET name = ?, template_id = ?, config_json = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?''',
+            f'''UPDATE agent_configurations
+               SET name = {ph}, template_id = {ph}, config_json = {ph}, updated_at = CURRENT_TIMESTAMP
+               WHERE id = {ph}''',
             (name, template_id, json.dumps(config_json) if isinstance(config_json, dict) else config_json, config_id)
         )
     
@@ -286,7 +495,8 @@ def update_configuration(config_id, name, template_id, config_json):
 def delete_configuration(config_id):
     """Delete configuration"""
     with get_db() as conn:
-        conn.execute('DELETE FROM agent_configurations WHERE id = ?', (config_id,))
+        ph = '%s' if USE_POSTGRES else '?'
+        conn.execute(f'DELETE FROM agent_configurations WHERE id = {ph}', (config_id,))
         return True
 
 # Custom Agents CRUD
@@ -301,8 +511,9 @@ def get_all_custom_agents():
 def get_custom_agent_by_id(agent_id):
     """Get specific custom agent by ID"""
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT * FROM custom_agents WHERE id = ?',
+            f'SELECT * FROM custom_agents WHERE id = {ph}',
             (agent_id,)
         ).fetchone()
         return dict(row) if row else None
@@ -326,10 +537,28 @@ def create_custom_agent(name, description, capabilities, tools, system_prompt, c
         int: The ID of the created agent
     """
     with get_db() as conn:
-        cursor = conn.execute(
-            '''INSERT INTO custom_agents (name, description, capabilities, tools, system_prompt, config_schema, source_format, source_file_id, is_imported)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (
+        if USE_POSTGRES:
+            query = '''INSERT INTO custom_agents (name, description, capabilities, tools, system_prompt, config_schema, source_format, source_file_id, is_imported)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id'''
+            params = (
+                name,
+                description,
+                json.dumps(capabilities) if isinstance(capabilities, list) else capabilities,
+                json.dumps(tools) if isinstance(tools, list) else tools,
+                system_prompt,
+                json.dumps(config_schema) if config_schema and isinstance(config_schema, dict) else config_schema,
+                source_format,
+                source_file_id,
+                convert_bool(is_imported)
+            )
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            agent_id = result['id']
+        else:
+            query = '''INSERT INTO custom_agents (name, description, capabilities, tools, system_prompt, config_schema, source_format, source_file_id, is_imported)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+            params = (
                 name,
                 description,
                 json.dumps(capabilities) if isinstance(capabilities, list) else capabilities,
@@ -340,8 +569,9 @@ def create_custom_agent(name, description, capabilities, tools, system_prompt, c
                 source_file_id,
                 is_imported
             )
-        )
-        agent_id = cursor.lastrowid
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            agent_id = cursor.lastrowid
     
     # Auto-generate agent card for the new custom agent
     _generate_and_store_agent_card('custom_agent', agent_id)
@@ -369,8 +599,9 @@ def update_custom_agent(agent_id, name, description, capabilities, tools, system
     """
     with get_db() as conn:
         # Build dynamic update query based on provided parameters
-        update_fields = ['name = ?', 'description = ?', 'capabilities = ?', 'tools = ?',
-                        'system_prompt = ?', 'updated_at = CURRENT_TIMESTAMP']
+        ph = '%s' if USE_POSTGRES else '?'
+        update_fields = [f'name = {ph}', f'description = {ph}', f'capabilities = {ph}', f'tools = {ph}',
+                        f'system_prompt = {ph}', 'updated_at = CURRENT_TIMESTAMP']
         params = [
             name,
             description,
@@ -380,24 +611,24 @@ def update_custom_agent(agent_id, name, description, capabilities, tools, system
         ]
         
         if config_schema is not None:
-            update_fields.append('config_schema = ?')
+            update_fields.append(f'config_schema = {ph}')
             params.append(json.dumps(config_schema) if isinstance(config_schema, dict) else config_schema)
         
         if source_format is not None:
-            update_fields.append('source_format = ?')
+            update_fields.append(f'source_format = {ph}')
             params.append(source_format)
         
         if source_file_id is not None:
-            update_fields.append('source_file_id = ?')
+            update_fields.append(f'source_file_id = {ph}')
             params.append(source_file_id)
         
         if is_imported is not None:
-            update_fields.append('is_imported = ?')
-            params.append(is_imported)
+            update_fields.append(f'is_imported = {ph}')
+            params.append(convert_bool(is_imported) if USE_POSTGRES else is_imported)
         
         params.append(agent_id)
         
-        query = f"UPDATE custom_agents SET {', '.join(update_fields)} WHERE id = ?"
+        query = f"UPDATE custom_agents SET {', '.join(update_fields)} WHERE id = {ph}"
         conn.execute(query, params)
     
     # Auto-regenerate agent card for the updated custom agent
@@ -408,7 +639,8 @@ def update_custom_agent(agent_id, name, description, capabilities, tools, system
 def delete_custom_agent(agent_id):
     """Delete custom agent"""
     with get_db() as conn:
-        conn.execute('DELETE FROM custom_agents WHERE id = ?', (agent_id,))
+        ph = '%s' if USE_POSTGRES else '?'
+        conn.execute(f'DELETE FROM custom_agents WHERE id = {ph}', (agent_id,))
         return True
 
 # File Uploads CRUD
@@ -430,12 +662,21 @@ def create_file_upload(filename, original_filename, file_format, file_size, uplo
     """
     with get_db() as conn:
         parse_result_json = json.dumps(parse_result) if parse_result and not isinstance(parse_result, str) else parse_result
-        cursor = conn.execute(
-            '''INSERT INTO file_uploads (filename, original_filename, file_format, file_size, upload_status, parse_result, error_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
-            (filename, original_filename, file_format, file_size, upload_status, parse_result_json, error_message)
-        )
-        return cursor.lastrowid
+        if USE_POSTGRES:
+            query = '''INSERT INTO file_uploads (filename, original_filename, file_format, file_size, upload_status, parse_result, error_message)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id'''
+            params = (filename, original_filename, file_format, file_size, upload_status, parse_result_json, error_message)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return result['id']
+        else:
+            query = '''INSERT INTO file_uploads (filename, original_filename, file_format, file_size, upload_status, parse_result, error_message)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)'''
+            params = (filename, original_filename, file_format, file_size, upload_status, parse_result_json, error_message)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return cursor.lastrowid
 
 def get_file_upload_by_id(upload_id):
     """
@@ -448,8 +689,9 @@ def get_file_upload_by_id(upload_id):
         dict: File upload data or None if not found
     """
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT * FROM file_uploads WHERE id = ?',
+            f'SELECT * FROM file_uploads WHERE id = {ph}',
             (upload_id,)
         ).fetchone()
         return dict(row) if row else None
@@ -471,11 +713,12 @@ def get_all_file_uploads(status=None, file_format=None):
         
         if status or file_format:
             conditions = []
+            ph = '%s' if USE_POSTGRES else '?'
             if status:
-                conditions.append('upload_status = ?')
+                conditions.append(f'upload_status = {ph}')
                 params.append(status)
             if file_format:
-                conditions.append('file_format = ?')
+                conditions.append(f'file_format = {ph}')
                 params.append(file_format)
             query += ' WHERE ' + ' AND '.join(conditions)
         
@@ -500,27 +743,28 @@ def update_file_upload(upload_id, upload_status=None, parse_result=None, error_m
     with get_db() as conn:
         update_fields = []
         params = []
+        ph = '%s' if USE_POSTGRES else '?'
         
         if upload_status is not None:
-            update_fields.append('upload_status = ?')
+            update_fields.append(f'upload_status = {ph}')
             params.append(upload_status)
             if upload_status in ['completed', 'failed']:
                 update_fields.append('processed_at = CURRENT_TIMESTAMP')
         
         if parse_result is not None:
             parse_result_json = json.dumps(parse_result) if parse_result and not isinstance(parse_result, str) else parse_result
-            update_fields.append('parse_result = ?')
+            update_fields.append(f'parse_result = {ph}')
             params.append(parse_result_json)
         
         if error_message is not None:
-            update_fields.append('error_message = ?')
+            update_fields.append(f'error_message = {ph}')
             params.append(error_message)
         
         if not update_fields:
             return True
         
         params.append(upload_id)
-        query = f"UPDATE file_uploads SET {', '.join(update_fields)} WHERE id = ?"
+        query = f"UPDATE file_uploads SET {', '.join(update_fields)} WHERE id = {ph}"
         conn.execute(query, params)
         return True
 
@@ -535,7 +779,8 @@ def delete_file_upload(upload_id):
         bool: True if deletion was successful
     """
     with get_db() as conn:
-        conn.execute('DELETE FROM file_uploads WHERE id = ?', (upload_id,))
+        ph = '%s' if USE_POSTGRES else '?'
+        conn.execute(f'DELETE FROM file_uploads WHERE id = {ph}', (upload_id,))
         return True
 
 # Format Conversions CRUD
@@ -557,13 +802,23 @@ def create_format_conversion(source_format, target_format, source_data, target_d
     with get_db() as conn:
         source_json = json.dumps(source_data) if source_data and not isinstance(source_data, str) else source_data
         target_json = json.dumps(target_data) if target_data and not isinstance(target_data, str) else target_data
-        cursor = conn.execute(
-            '''INSERT INTO format_conversions
-               (source_format, target_format, source_data, target_data, conversion_status, error_message)
-               VALUES (?, ?, ?, ?, ?, ?)''',
-            (source_format, target_format, source_json, target_json, conversion_status, error_message)
-        )
-        return cursor.lastrowid
+        if USE_POSTGRES:
+            query = '''INSERT INTO format_conversions
+                       (source_format, target_format, source_data, target_data, conversion_status, error_message)
+                       VALUES (%s, %s, %s, %s, %s, %s) RETURNING id'''
+            params = (source_format, target_format, source_json, target_json, conversion_status, error_message)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return result['id']
+        else:
+            query = '''INSERT INTO format_conversions
+                       (source_format, target_format, source_data, target_data, conversion_status, error_message)
+                       VALUES (?, ?, ?, ?, ?, ?)'''
+            params = (source_format, target_format, source_json, target_json, conversion_status, error_message)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return cursor.lastrowid
 
 def get_format_conversion_by_id(conversion_id):
     """
@@ -576,8 +831,9 @@ def get_format_conversion_by_id(conversion_id):
         dict: Format conversion data or None if not found
     """
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT * FROM format_conversions WHERE id = ?',
+            f'SELECT * FROM format_conversions WHERE id = {ph}',
             (conversion_id,)
         ).fetchone()
         return dict(row) if row else None
@@ -597,7 +853,8 @@ def get_all_format_conversions(limit=None):
         params = []
         
         if limit:
-            query += ' LIMIT ?'
+            ph = '%s' if USE_POSTGRES else '?'
+            query += f' LIMIT {ph}'
             params.append(limit)
         
         rows = conn.execute(query, params).fetchall()
@@ -619,13 +876,14 @@ def get_conversions_by_formats(source_format=None, target_format=None, limit=Non
         query = 'SELECT * FROM format_conversions'
         params = []
         conditions = []
+        ph = '%s' if USE_POSTGRES else '?'
         
         if source_format:
-            conditions.append('source_format = ?')
+            conditions.append(f'source_format = {ph}')
             params.append(source_format)
         
         if target_format:
-            conditions.append('target_format = ?')
+            conditions.append(f'target_format = {ph}')
             params.append(target_format)
         
         if conditions:
@@ -634,7 +892,7 @@ def get_conversions_by_formats(source_format=None, target_format=None, limit=Non
         query += ' ORDER BY created_at DESC'
         
         if limit:
-            query += ' LIMIT ?'
+            query += f' LIMIT {ph}'
             params.append(limit)
         
         rows = conn.execute(query, params).fetchall()
@@ -651,7 +909,8 @@ def delete_format_conversion(conversion_id):
         bool: True if deletion was successful
     """
     with get_db() as conn:
-        conn.execute('DELETE FROM format_conversions WHERE id = ?', (conversion_id,))
+        ph = '%s' if USE_POSTGRES else '?'
+        conn.execute(f'DELETE FROM format_conversions WHERE id = {ph}', (conversion_id,))
         return True
 
 # Agent Cards CRUD
@@ -672,13 +931,23 @@ def create_agent_card(entity_type, entity_id, card_data, card_version='1.0', pub
     print(f"DB DEBUG: Creating card for entity_type={entity_type}, entity_id={entity_id}")
     with get_db() as conn:
         card_json = json.dumps(card_data) if isinstance(card_data, dict) else card_data
-        cursor = conn.execute(
-            '''INSERT INTO agent_cards (entity_type, entity_id, card_data, card_version, published)
-               VALUES (?, ?, ?, ?, ?)''',
-            (entity_type, entity_id, card_json, card_version, published)
-        )
-        print(f"DB DEBUG: Created card with id={cursor.lastrowid}")
-        return cursor.lastrowid
+        if USE_POSTGRES:
+            query = '''INSERT INTO agent_cards (entity_type, entity_id, card_data, card_version, published)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING id'''
+            params = (entity_type, entity_id, card_json, card_version, convert_bool(published))
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            print(f"DB DEBUG: Created card with id={result['id']}")
+            return result['id']
+        else:
+            query = '''INSERT INTO agent_cards (entity_type, entity_id, card_data, card_version, published)
+                       VALUES (?, ?, ?, ?, ?)'''
+            params = (entity_type, entity_id, card_json, card_version, published)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            print(f"DB DEBUG: Created card with id={cursor.lastrowid}")
+            return cursor.lastrowid
 
 def get_agent_card_by_id(card_id):
     """
@@ -691,8 +960,9 @@ def get_agent_card_by_id(card_id):
         dict: Agent card data or None if not found
     """
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT * FROM agent_cards WHERE id = ?',
+            f'SELECT * FROM agent_cards WHERE id = {ph}',
             (card_id,)
         ).fetchone()
         if row:
@@ -718,8 +988,9 @@ def get_agent_card_by_entity(entity_type, entity_id):
         dict: Agent card data or None if not found
     """
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         row = conn.execute(
-            'SELECT * FROM agent_cards WHERE entity_type = ? AND entity_id = ?',
+            f'SELECT * FROM agent_cards WHERE entity_type = {ph} AND entity_id = {ph}',
             (entity_type, entity_id)
         ).fetchone()
         if row:
@@ -748,14 +1019,15 @@ def get_all_agent_cards(entity_type=None, published=None):
         query = 'SELECT * FROM agent_cards'
         params = []
         conditions = []
+        ph = '%s' if USE_POSTGRES else '?'
         
         if entity_type:
-            conditions.append('entity_type = ?')
+            conditions.append(f'entity_type = {ph}')
             params.append(entity_type)
         
         if published is not None:
-            conditions.append('published = ?')
-            params.append(1 if published else 0)
+            conditions.append(f'published = {ph}')
+            params.append(convert_bool(published) if USE_POSTGRES else (1 if published else 0))
         
         if conditions:
             query += ' WHERE ' + ' AND '.join(conditions)
@@ -790,18 +1062,19 @@ def update_agent_card(card_id, card_data=None, published=None):
     with get_db() as conn:
         update_fields = ['updated_at = CURRENT_TIMESTAMP']
         params = []
+        ph = '%s' if USE_POSTGRES else '?'
         
         if card_data is not None:
             card_json = json.dumps(card_data) if isinstance(card_data, dict) else card_data
-            update_fields.append('card_data = ?')
+            update_fields.append(f'card_data = {ph}')
             params.append(card_json)
         
         if published is not None:
-            update_fields.append('published = ?')
-            params.append(1 if published else 0)
+            update_fields.append(f'published = {ph}')
+            params.append(convert_bool(published) if USE_POSTGRES else (1 if published else 0))
         
         params.append(card_id)
-        query = f"UPDATE agent_cards SET {', '.join(update_fields)} WHERE id = ?"
+        query = f"UPDATE agent_cards SET {', '.join(update_fields)} WHERE id = {ph}"
         conn.execute(query, params)
         return card_id
 
@@ -816,7 +1089,8 @@ def delete_agent_card(card_id):
         bool: True if deletion was successful
     """
     with get_db() as conn:
-        conn.execute('DELETE FROM agent_cards WHERE id = ?', (card_id,))
+        ph = '%s' if USE_POSTGRES else '?'
+        conn.execute(f'DELETE FROM agent_cards WHERE id = {ph}', (card_id,))
         return True
 
 def get_agent_cards_by_type(entity_type):
@@ -830,8 +1104,9 @@ def get_agent_cards_by_type(entity_type):
         list: List of agent card dictionaries
     """
     with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
         rows = conn.execute(
-            'SELECT * FROM agent_cards WHERE entity_type = ? ORDER BY updated_at DESC',
+            f'SELECT * FROM agent_cards WHERE entity_type = {ph} ORDER BY updated_at DESC',
             (entity_type,)
         ).fetchall()
         cards = []

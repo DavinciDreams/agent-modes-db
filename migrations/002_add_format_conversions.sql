@@ -1,5 +1,6 @@
 -- Migration 002: Add Format Conversions Support
 -- This migration adds the format_conversions table for tracking conversion history
+-- Note: INTEGER PRIMARY KEY AUTOINCREMENT will be converted to SERIAL PRIMARY KEY for Postgres
 
 -- Create format_conversions table
 CREATE TABLE IF NOT EXISTS format_conversions (
