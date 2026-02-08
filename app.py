@@ -9,6 +9,10 @@ from converters import UniversalConverter
 
 app = Flask(__name__)
 
+@app.before_request
+def log_request():
+    print(f"Request: {request.method} {request.path} from {request.remote_addr}")
+
 # Initialize database on first run
 # On Vercel, database is in /tmp and needs to be initialized on every cold start
 db_path = db.DB_FILE if hasattr(db, 'DB_FILE') else 'agents.db'
