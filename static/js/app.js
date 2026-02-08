@@ -3,12 +3,16 @@ let templates = [];
 let configurations = [];
 let customAgents = [];
 let currentDeleteCallback = null;
+let uploadedFiles = [];
+let currentAgentCard = null;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     loadTemplates();
     loadConfigurations();
     loadCustomAgents();
+    initializeDragAndDrop();
+    initializeUploadModalDragAndDrop();
 
     // Set up tab change listeners
     document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(tab => {
@@ -17,6 +21,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (target === '#templates') loadTemplates();
             else if (target === '#configurations') loadConfigurations();
             else if (target === '#custom-agents') loadCustomAgents();
+            else if (target === '#import-convert') {
+                loadRecentUploads();
+                loadRecentConversions();
+            }
         });
     });
 });
@@ -599,6 +607,678 @@ async function saveCustomAgent() {
         loadCustomAgents();
     } catch (error) {
         showToast('Error: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// Import & Convert Functions
+// ============================================
+
+// ============================================
+// Drag and Drop Functions
+// ============================================
+
+function initializeDragAndDrop() {
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    if (!dropZone || !fileInput) return;
+
+    // Click to browse
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    // File input change
+    fileInput.addEventListener('change', (e) => handleFileSelect(e.target.files));
+
+    // Drag events
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleFileSelect(e.dataTransfer.files);
+    });
+}
+
+function initializeUploadModalDragAndDrop() {
+    const dropZone = document.getElementById('uploadDropZone');
+    const fileInput = document.getElementById('uploadFileInput');
+
+    if (!dropZone || !fileInput) return;
+
+    // Click to browse
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    // File input change
+    fileInput.addEventListener('change', (e) => handleUploadFileSelect(e.target.files));
+
+    // Drag events
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleUploadFileSelect(e.dataTransfer.files);
+    });
+}
+
+function handleFileSelect(files) {
+    const filePreviewList = document.getElementById('filePreviewList');
+    filePreviewList.innerHTML = '';
+
+    Array.from(files).forEach(file => {
+        const format = detectFileFormat(file.name);
+        const size = formatFileSize(file.size);
+        
+        const fileCard = `
+            <div class="file-preview-card">
+                <div class="d-flex align-items-center">
+                    <div class="file-icon ${format}">
+                        <i class="fas fa-file-${format === 'json' ? 'code' : format === 'yaml' ? 'code' : 'alt'}"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-size">${size} • ${format.toUpperCase()}</div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger" onclick="removeFile(this)">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+        filePreviewList.insertAdjacentHTML('beforeend', fileCard);
+        
+        uploadedFiles.push(file);
+    });
+
+    if (files.length > 0) {
+        showToast(`${files.length} file(s) selected`, 'info');
+    }
+}
+
+function handleUploadFileSelect(files) {
+    const uploadFileList = document.getElementById('uploadFileList');
+    uploadFileList.innerHTML = '';
+
+    Array.from(files).forEach(file => {
+        const format = detectFileFormat(file.name);
+        const size = formatFileSize(file.size);
+        
+        const fileCard = `
+            <div class="file-preview-card">
+                <div class="d-flex align-items-center">
+                    <div class="file-icon ${format}">
+                        <i class="fas fa-file-${format === 'json' ? 'code' : format === 'yaml' ? 'code' : 'alt'}"></i>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-size">${size} • ${format.toUpperCase()}</div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger" onclick="removeUploadFile(this)">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+        uploadFileList.insertAdjacentHTML('beforeend', fileCard);
+    });
+}
+
+function removeFile(button) {
+    const fileCard = button.closest('.file-preview-card');
+    const fileName = fileCard.querySelector('.file-name').textContent;
+    uploadedFiles = uploadedFiles.filter(f => f.name !== fileName);
+    fileCard.remove();
+}
+
+function removeUploadFile(button) {
+    const fileCard = button.closest('.file-preview-card');
+    fileCard.remove();
+}
+
+function detectFileFormat(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    if (ext === 'json') return 'json';
+    if (ext === 'yaml' || ext === 'yml') return 'yaml';
+    if (ext === 'md') return 'md';
+    return 'unknown';
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
+
+// ============================================
+// File Upload Functions
+// ============================================
+
+function showUploadModal() {
+    document.getElementById('uploadFileList').innerHTML = '';
+    document.getElementById('uploadProgress').style.display = 'none';
+    new bootstrap.Modal(document.getElementById('fileUploadModal')).show();
+}
+
+async function uploadFiles() {
+    const fileInput = document.getElementById('uploadFileInput');
+    const files = fileInput.files;
+    
+    if (files.length === 0) {
+        showToast('Please select files to upload', 'error');
+        return;
+    }
+
+    const createTemplate = document.getElementById('createTemplate').checked;
+    const convertFormat = document.getElementById('convertFormat').checked;
+
+    const formData = new FormData();
+    Array.from(files).forEach(file => {
+        formData.append('files', file);
+    });
+    formData.append('create_template', createTemplate);
+    formData.append('convert_format', convertFormat);
+
+    // Show progress
+    document.getElementById('uploadProgress').style.display = 'block';
+    const progressBar = document.getElementById('uploadProgressBar');
+    const statusText = document.getElementById('uploadStatus');
+    
+    try {
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percentComplete = (e.loaded / e.total) * 100;
+                progressBar.style.width = percentComplete + '%';
+                statusText.textContent = `Uploading... ${Math.round(percentComplete)}%`;
+            }
+        });
+
+        xhr.addEventListener('load', () => {
+            if (xhr.status === 200) {
+                const response = JSON.parse(xhr.responseText);
+                showToast('Files uploaded successfully!', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('fileUploadModal')).hide();
+                loadRecentUploads();
+            } else {
+                const error = JSON.parse(xhr.responseText);
+                showToast('Upload failed: ' + (error.error || 'Unknown error'), 'error');
+            }
+            document.getElementById('uploadProgress').style.display = 'none';
+        });
+
+        xhr.addEventListener('error', () => {
+            showToast('Upload failed: Network error', 'error');
+            document.getElementById('uploadProgress').style.display = 'none';
+        });
+
+        xhr.open('POST', '/api/files/upload/multiple');
+        xhr.send(formData);
+        
+    } catch (error) {
+        showToast('Upload failed: ' + error.message, 'error');
+        document.getElementById('uploadProgress').style.display = 'none';
+    }
+}
+
+async function loadRecentUploads() {
+    try {
+        const response = await fetch('/api/files');
+        const data = await response.json();
+        renderRecentUploads(data.uploads || []);
+    } catch (error) {
+        console.error('Error loading uploads:', error);
+    }
+}
+
+function renderRecentUploads(uploads) {
+    const tbody = document.querySelector('#recentUploadsTable tbody');
+    
+    if (uploads.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No recent uploads</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = uploads.map(upload => `
+        <tr>
+            <td class="text-break">${upload.original_filename}</td>
+            <td><span class="format-badge ${upload.file_format}">${upload.file_format.toUpperCase()}</span></td>
+            <td>${formatFileSize(upload.file_size)}</td>
+            <td><span class="status-badge ${upload.upload_status}">${upload.upload_status}</span></td>
+            <td>${formatDate(upload.uploaded_at)}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-info" onclick="viewUploadDetails(${upload.id})">
+                    <i class="fas fa-eye"></i>
+                </button>
+                ${upload.upload_status === 'completed' ? `
+                    <button class="btn btn-sm btn-outline-success" onclick="downloadUpload(${upload.id})">
+                        <i class="fas fa-download"></i>
+                    </button>
+                ` : ''}
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function viewUploadDetails(id) {
+    try {
+        const response = await fetch(`/api/files/${id}`);
+        const upload = await response.json();
+        
+        // Show details in a modal or alert
+        alert(`Upload Details:\n\nFilename: ${upload.original_filename}\nFormat: ${upload.file_format}\nSize: ${formatFileSize(upload.file_size)}\nStatus: ${upload.upload_status}\nUploaded: ${formatDate(upload.uploaded_at)}`);
+    } catch (error) {
+        showToast('Error loading upload details: ' + error.message, 'error');
+    }
+}
+
+async function downloadUpload(id) {
+    try {
+        const response = await fetch(`/api/files/${id}`);
+        const upload = await response.json();
+        
+        if (upload.parse_result) {
+            const data = typeof upload.parse_result === 'string' ? JSON.parse(upload.parse_result) : upload.parse_result;
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = upload.original_filename || `upload_${id}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast('File downloaded successfully', 'success');
+        } else {
+            showToast('No data available for download', 'error');
+        }
+    } catch (error) {
+        showToast('Error downloading file: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// Format Converter Functions
+// ============================================
+
+function showFormatConverter() {
+    document.getElementById('formatConverterCard').style.display = 'block';
+    document.getElementById('agentCardsCard').style.display = 'none';
+    document.getElementById('formatConverterCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function clearConverter() {
+    document.getElementById('converterInput').value = '';
+    document.getElementById('converterResult').value = '';
+    document.getElementById('converterOutput').style.display = 'none';
+}
+
+async function convertFormat() {
+    const sourceFormat = document.getElementById('sourceFormat').value;
+    const targetFormat = document.getElementById('targetFormat').value;
+    const content = document.getElementById('converterInput').value;
+
+    if (!content.trim()) {
+        showToast('Please enter content to convert', 'error');
+        return;
+    }
+
+    if (sourceFormat === targetFormat) {
+        showToast('Source and target formats are the same', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/convert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_format: sourceFormat,
+                target_format: targetFormat,
+                content: content
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Conversion failed');
+        }
+
+        const result = await response.json();
+        document.getElementById('converterResult').value = JSON.stringify(result.converted_data, null, 2);
+        document.getElementById('converterOutput').style.display = 'block';
+        showToast('Format converted successfully!', 'success');
+        
+        // Load recent conversions
+        loadRecentConversions();
+    } catch (error) {
+        showToast('Conversion failed: ' + error.message, 'error');
+    }
+}
+
+function copyConvertedOutput() {
+    const output = document.getElementById('converterResult');
+    output.select();
+    document.execCommand('copy');
+    showToast('Copied to clipboard!', 'success');
+}
+
+function downloadConvertedOutput() {
+    const content = document.getElementById('converterResult').value;
+    const targetFormat = document.getElementById('targetFormat').value;
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `converted_${targetFormat}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    showToast('File downloaded successfully', 'success');
+}
+
+async function loadRecentConversions() {
+    try {
+        const response = await fetch('/api/convert/history');
+        const data = await response.json();
+        renderRecentConversions(data.conversions || []);
+    } catch (error) {
+        console.error('Error loading conversions:', error);
+    }
+}
+
+function renderRecentConversions(conversions) {
+    const tbody = document.querySelector('#recentConversionsTable tbody');
+    
+    if (conversions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center">No recent conversions</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = conversions.map(conv => `
+        <tr>
+            <td><span class="format-badge ${conv.source_format}">${conv.source_format.toUpperCase()}</span></td>
+            <td><span class="format-badge ${conv.target_format}">${conv.target_format.toUpperCase()}</span></td>
+            <td><span class="status-badge ${conv.conversion_status}">${conv.conversion_status}</span></td>
+            <td>${formatDate(conv.created_at)}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-info" onclick="viewConversionDetails(${conv.id})">
+                    <i class="fas fa-eye"></i>
+                </button>
+                ${conv.conversion_status === 'success' ? `
+                    <button class="btn btn-sm btn-outline-success" onclick="downloadConversion(${conv.id})">
+                        <i class="fas fa-download"></i>
+                    </button>
+                ` : ''}
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function viewConversionDetails(id) {
+    try {
+        const response = await fetch('/api/convert/history');
+        const data = await response.json();
+        const conversion = data.conversions.find(c => c.id === id);
+        
+        if (conversion) {
+            alert(`Conversion Details:\n\nSource: ${conversion.source_format}\nTarget: ${conversion.target_format}\nStatus: ${conversion.conversion_status}\nCreated: ${formatDate(conversion.created_at)}`);
+        } else {
+            showToast('Conversion not found', 'error');
+        }
+    } catch (error) {
+        showToast('Error loading conversion details: ' + error.message, 'error');
+    }
+}
+
+async function downloadConversion(id) {
+    try {
+        const response = await fetch('/api/convert/history');
+        const data = await response.json();
+        const conversion = data.conversions.find(c => c.id === id);
+        
+        if (conversion && conversion.target_data) {
+            const targetData = typeof conversion.target_data === 'string' ? JSON.parse(conversion.target_data) : conversion.target_data;
+            const blob = new Blob([JSON.stringify(targetData, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `conversion_${id}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast('File downloaded successfully', 'success');
+        } else {
+            showToast('No data available for download', 'error');
+        }
+    } catch (error) {
+        showToast('Error downloading file: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// Agent Cards Functions
+// ============================================
+
+function showAgentCards() {
+    document.getElementById('agentCardsCard').style.display = 'block';
+    document.getElementById('formatConverterCard').style.display = 'none';
+    loadAgentCards();
+    document.getElementById('agentCardsCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadAgentCards() {
+    const entityType = document.getElementById('cardEntityType').value;
+    const grid = document.getElementById('agentCardsGrid');
+    
+    grid.innerHTML = '<div class="col-12 text-center"><div class="spinner-border" role="status"></div></div>';
+    
+    try {
+        const response = await fetch(`/api/agent-cards?entity_type=${entityType}`);
+        const data = await response.json();
+        renderAgentCards(data.cards || []);
+    } catch (error) {
+        grid.innerHTML = '<div class="col-12"><p class="text-muted text-center">Error loading agent cards</p></div>';
+        console.error('Error loading agent cards:', error);
+    }
+}
+
+function renderAgentCards(cards) {
+    const grid = document.getElementById('agentCardsGrid');
+    
+    if (cards.length === 0) {
+        grid.innerHTML = '<div class="col-12"><p class="text-muted text-center">No agent cards found</p></div>';
+        return;
+    }
+
+    grid.innerHTML = cards.map(card => {
+        const cardData = JSON.parse(card.card_data);
+        const isValid = cardData && cardData.name && cardData.description;
+        
+        return `
+            <div class="col-md-6 col-lg-4">
+                <div class="agent-card-preview h-100">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0">${cardData.name || 'Unknown'}</h6>
+                        <p class="card-description mb-0">${cardData.description || 'No description'}</p>
+                    </div>
+                    <div class="card-meta">
+                        <span class="badge bg-secondary">${card.entity_type}</span>
+                        <span class="badge bg-info">v${card.card_version}</span>
+                        ${card.published ? '<span class="badge bg-success">Published</span>' : '<span class="badge bg-warning">Draft</span>'}
+                    </div>
+                    <div class="validation-status ${isValid ? 'valid' : 'invalid'}">
+                        <i class="fas fa-${isValid ? 'check-circle' : 'exclamation-circle'}"></i>
+                        <span>${isValid ? 'Valid' : 'Invalid'}</span>
+                    </div>
+                    <div class="card-actions">
+                        <button class="btn btn-sm btn-outline-primary" onclick="viewAgentCard(${card.id})">
+                            <i class="fas fa-eye"></i> View
+                        </button>
+                        <button class="btn btn-sm btn-outline-success" onclick="copyAgentCardData(${card.id})">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        ${!card.published ? `
+                            <button class="btn btn-sm btn-outline-info" onclick="publishAgentCard(${card.id})">
+                                <i class="fas fa-upload"></i> Publish
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function viewAgentCard(id) {
+    try {
+        const response = await fetch(`/api/agent-cards/${id}`);
+        const card = await response.json();
+        const cardData = JSON.parse(card.card_data);
+        
+        currentAgentCard = card;
+        
+        // Populate details
+        const detailsHtml = `
+            <div class="detail-row">
+                <span class="detail-label">Name:</span>
+                <span class="detail-value">${cardData.name || 'N/A'}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Description:</span>
+                <span class="detail-value">${cardData.description || 'N/A'}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Entity Type:</span>
+                <span class="detail-value">${card.entity_type}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Entity ID:</span>
+                <span class="detail-value">${card.entity_id}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Version:</span>
+                <span class="detail-value">${card.card_version}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Published:</span>
+                <span class="detail-value">${card.published ? 'Yes' : 'No'}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Generated:</span>
+                <span class="detail-value">${formatDate(card.generated_at)}</span>
+            </div>
+        `;
+        
+        document.getElementById('agentCardDetails').innerHTML = detailsHtml;
+        document.getElementById('agentCardJson').value = JSON.stringify(cardData, null, 2);
+        
+        new bootstrap.Modal(document.getElementById('agentCardModal')).show();
+    } catch (error) {
+        showToast('Error loading agent card: ' + error.message, 'error');
+    }
+}
+
+function copyAgentCard() {
+    const jsonContent = document.getElementById('agentCardJson');
+    jsonContent.select();
+    document.execCommand('copy');
+    showToast('Copied to clipboard!', 'success');
+}
+
+async function copyAgentCardData(id) {
+    try {
+        const response = await fetch(`/api/agent-cards/${id}`);
+        const card = await response.json();
+        const cardData = JSON.parse(card.card_data);
+        
+        navigator.clipboard.writeText(JSON.stringify(cardData, null, 2));
+        showToast('Agent card copied to clipboard!', 'success');
+    } catch (error) {
+        showToast('Error copying agent card: ' + error.message, 'error');
+    }
+}
+
+function downloadAgentCardJSON() {
+    if (!currentAgentCard) return;
+    
+    const cardData = JSON.parse(currentAgentCard.card_data);
+    const blob = new Blob([JSON.stringify(cardData, null, 2)], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agent_card_${currentAgentCard.id}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    showToast('JSON file downloaded successfully', 'success');
+}
+
+function downloadAgentCardYAML() {
+    if (!currentAgentCard) return;
+    
+    const cardData = JSON.parse(currentAgentCard.card_data);
+    // Simple YAML conversion (for production, use a proper YAML library)
+    let yamlContent = `name: ${cardData.name}\n`;
+    yamlContent += `description: ${cardData.description}\n`;
+    if (cardData.capabilities) {
+        yamlContent += `capabilities:\n`;
+        cardData.capabilities.forEach(cap => {
+            yamlContent += `  - ${cap}\n`;
+        });
+    }
+    
+    const blob = new Blob([yamlContent], { type: 'text/yaml' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agent_card_${currentAgentCard.id}.yaml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    showToast('YAML file downloaded successfully', 'success');
+}
+
+async function publishAgentCard(id) {
+    try {
+        const response = await fetch(`/api/agent-cards/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ published: true })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to publish agent card');
+        }
+        
+        showToast('Agent card published successfully!', 'success');
+        loadAgentCards();
+    } catch (error) {
+        showToast('Error publishing agent card: ' + error.message, 'error');
     }
 }
 

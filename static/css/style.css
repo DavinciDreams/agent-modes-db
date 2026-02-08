@@ -330,3 +330,435 @@ textarea.font-monospace {
 .shadow {
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15) !important;
 }
+
+/* ============================================
+   Drag and Drop Zone Styles
+   ============================================ */
+
+.drop-zone {
+    border: 3px dashed #ced4da;
+    border-radius: 10px;
+    padding: 3rem 2rem;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    background-color: #f8f9fa;
+}
+
+.drop-zone:hover {
+    border-color: #667eea;
+    background-color: #f0f4ff;
+}
+
+.drop-zone.dragover {
+    border-color: #667eea;
+    background-color: #e8edff;
+    transform: scale(1.02);
+}
+
+.drop-zone.active {
+    border-color: #28a745;
+    background-color: #e8f5e9;
+}
+
+/* File Preview Card */
+.file-preview-card {
+    background-color: white;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    transition: all 0.2s ease;
+}
+
+.file-preview-card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.file-preview-card .file-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    font-size: 1.25rem;
+}
+
+.file-preview-card .file-icon.json {
+    background-color: #e3f2fd;
+    color: #1976d2;
+}
+
+.file-preview-card .file-icon.yaml {
+    background-color: #e8f5e9;
+    color: #388e3c;
+}
+
+.file-preview-card .file-icon.md {
+    background-color: #fff3e0;
+    color: #f57c00;
+}
+
+.file-preview-card .file-name {
+    font-weight: 500;
+    color: #495057;
+    word-break: break-all;
+}
+
+.file-preview-card .file-size {
+    color: #6c757d;
+    font-size: 0.875rem;
+}
+
+.file-preview-card .remove-file-btn {
+    color: #dc3545;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.file-preview-card .remove-file-btn:hover {
+    color: #c82333;
+}
+
+/* ============================================
+   Format Converter Styles
+   ============================================ */
+
+#formatConverterCard {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+#converterInput,
+#converterResult {
+    background-color: #f8f9fa;
+    border: 1px solid #ced4da;
+    line-height: 1.5;
+    min-height: 200px;
+}
+
+#converterResult {
+    background-color: #e9ecef;
+}
+
+.converter-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.converter-badge.source {
+    background-color: #e3f2fd;
+    color: #1976d2;
+}
+
+.converter-badge.target {
+    background-color: #e8f5e9;
+    color: #388e3c;
+}
+
+/* ============================================
+   Agent Card Styles
+   ============================================ */
+
+#agentCardsCard {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.agent-card-preview {
+    background-color: white;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 1.5rem;
+    transition: all 0.2s ease;
+}
+
+.agent-card-preview:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+.agent-card-preview .card-header {
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 1rem;
+    margin-bottom: 1rem;
+}
+
+.agent-card-preview .card-title {
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+.agent-card-preview .card-description {
+    color: #6c757d;
+    font-size: 0.875rem;
+}
+
+.agent-card-preview .card-meta {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.agent-card-preview .card-meta .badge {
+    font-size: 0.75rem;
+}
+
+.agent-card-preview .validation-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+}
+
+.agent-card-preview .validation-status.valid {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.agent-card-preview .validation-status.invalid {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.agent-card-preview .card-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* ============================================
+   Progress Bar Styles
+   ============================================ */
+
+.progress {
+    height: 1.5rem;
+    border-radius: 8px;
+    background-color: #e9ecef;
+}
+
+.progress-bar {
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    transition: width 0.3s ease;
+}
+
+/* ============================================
+   Quick Action Cards
+   ============================================ */
+
+.card.h-100.text-center.p-4 {
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.card.h-100.text-center.p-4:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.card.h-100.text-center.p-4 i {
+    transition: transform 0.3s ease;
+}
+
+.card.h-100.text-center.p-4:hover i {
+    transform: scale(1.1);
+}
+
+/* ============================================
+   Modal Enhancements
+   ============================================ */
+
+.modal-xl {
+    max-width: 90%;
+}
+
+#agentCardJson {
+    background-color: #f8f9fa;
+    border: 1px solid #ced4da;
+    line-height: 1.5;
+}
+
+#agentCardDetails {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+#agentCardDetails .detail-row {
+    display: flex;
+    margin-bottom: 0.75rem;
+}
+
+#agentCardDetails .detail-label {
+    font-weight: 500;
+    color: #495057;
+    width: 120px;
+    flex-shrink: 0;
+}
+
+#agentCardDetails .detail-value {
+    color: #6c757d;
+    word-break: break-word;
+}
+
+/* ============================================
+   Table Enhancements for Import & Convert
+   ============================================ */
+
+#recentUploadsTable th,
+#recentConversionsTable th {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #495057;
+}
+
+#recentUploadsTable td,
+#recentConversionsTable td {
+    font-size: 0.875rem;
+    vertical-align: middle;
+}
+
+.status-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.status-badge.pending {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.status-badge.processing {
+    background-color: #cce5ff;
+    color: #004085;
+}
+
+.status-badge.completed {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.status-badge.failed {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.status-badge.success {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+/* ============================================
+   Responsive Design Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+    .drop-zone {
+        padding: 2rem 1rem;
+    }
+
+    .drop-zone i {
+        font-size: 2.5rem;
+    }
+
+    .drop-zone h5,
+    .drop-zone h6 {
+        font-size: 1rem;
+    }
+
+    .file-preview-card {
+        padding: 0.75rem;
+    }
+
+    .agent-card-preview {
+        padding: 1rem;
+    }
+
+    #agentCardDetails .detail-row {
+        flex-direction: column;
+    }
+
+    #agentCardDetails .detail-label {
+        width: 100%;
+        margin-bottom: 0.25rem;
+    }
+
+    .card.h-100.text-center.p-4 {
+        padding: 1.5rem;
+    }
+
+    .card.h-100.text-center.p-4 i {
+        font-size: 2rem;
+    }
+}
+
+/* ============================================
+   Loading States
+   ============================================ */
+
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.loading-overlay .spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* ============================================
+   Format Badge Colors
+   ============================================ */
+
+.format-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.format-badge.claude {
+    background-color: #e3f2fd;
+    color: #1976d2;
+}
+
+.format-badge.roo {
+    background-color: #f3e5f5;
+    color: #7b1fa2;
+}
+
+.format-badge.custom {
+    background-color: #fff3e0;
+    color: #f57c00;
+}
+
+.format-badge.json {
+    background-color: #e3f2fd;
+    color: #1976d2;
+}
+
+.format-badge.yaml {
+    background-color: #e8f5e9;
+    color: #388e3c;
+}
+
+.format-badge.md {
+    background-color: #fff3e0;
+    color: #f57c00;
+}
