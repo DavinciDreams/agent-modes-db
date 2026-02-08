@@ -124,6 +124,71 @@ def execute_insert(conn, query, params):
     
     return None
 
+def execute_query(conn, query, params=None):
+    """
+    Execute a SELECT query and return results.
+    Works for both SQLite and Postgres.
+    
+    Args:
+        conn: Database connection
+        query: SQL query string
+        params: Query parameters (optional)
+    
+    Returns:
+        Result of fetchall() for SELECT queries
+    """
+    if USE_POSTGRES:
+        cursor = conn.cursor()
+        cursor.execute(query, params or ())
+        return cursor.fetchall()
+    else:
+        if params:
+            return conn.execute(query, params).fetchall()
+        else:
+            return conn.execute(query).fetchall()
+
+def execute_query_one(conn, query, params=None):
+    """
+    Execute a SELECT query and return a single result.
+    Works for both SQLite and Postgres.
+    
+    Args:
+        conn: Database connection
+        query: SQL query string
+        params: Query parameters (optional)
+    
+    Returns:
+        Result of fetchone() for SELECT queries
+    """
+    if USE_POSTGRES:
+        cursor = conn.cursor()
+        cursor.execute(query, params or ())
+        return cursor.fetchone()
+    else:
+        if params:
+            return conn.execute(query, params).fetchone()
+        else:
+            return conn.execute(query).fetchone()
+
+def execute_update(conn, query, params=None):
+    """
+    Execute an INSERT/UPDATE/DELETE query.
+    Works for both SQLite and Postgres.
+    
+    Args:
+        conn: Database connection
+        query: SQL query string
+        params: Query parameters (optional)
+    """
+    if USE_POSTGRES:
+        cursor = conn.cursor()
+        cursor.execute(query, params or ())
+    else:
+        if params:
+            conn.execute(query, params)
+        else:
+            conn.execute(query)
+
 def init_db():
     """Initialize database with schema and apply all migrations"""
     with open('schema.sql', 'r') as f:
@@ -312,35 +377,31 @@ def seed_builtin_templates():
     with get_db() as conn:
         for template in templates:
             # Check if template already exists
-            existing = conn.execute(
-                'SELECT id FROM agent_templates WHERE name = %s AND is_builtin = %s' if USE_POSTGRES else 'SELECT id FROM agent_templates WHERE name = ? AND is_builtin = 1',
-                (template['name'], convert_bool(True)) if USE_POSTGRES else (template['name'],)
-            ).fetchone()
+            query = 'SELECT id FROM agent_templates WHERE name = %s AND is_builtin = %s' if USE_POSTGRES else 'SELECT id FROM agent_templates WHERE name = ? AND is_builtin = 1'
+            params = (template['name'], convert_bool(True)) if USE_POSTGRES else (template['name'],)
+            existing = execute_query_one(conn, query, params)
 
             if not existing:
-                conn.execute(
-                    '''INSERT INTO agent_templates (name, description, category, is_builtin)
-                       VALUES (%s, %s, %s, %s)''' if USE_POSTGRES else
-                    '''INSERT INTO agent_templates (name, description, category, is_builtin)
-                       VALUES (?, ?, ?, ?)''',
-                    (template['name'], template['description'], template['category'], convert_bool(True)) if USE_POSTGRES else
-                    (template['name'], template['description'], template['category'], template['is_builtin'])
-                )
+                query = '''INSERT INTO agent_templates (name, description, category, is_builtin)
+                           VALUES (%s, %s, %s, %s)''' if USE_POSTGRES else \
+                       '''INSERT INTO agent_templates (name, description, category, is_builtin)
+                          VALUES (?, ?, ?, ?)'''
+                params = (template['name'], template['description'], template['category'], convert_bool(True)) if USE_POSTGRES else \
+                        (template['name'], template['description'], template['category'], template['is_builtin'])
+                execute_update(conn, query, params)
 
 # Agent Templates CRUD
 def get_all_templates():
     """Get all agent templates"""
     with get_db() as conn:
-        rows = conn.execute(
-            'SELECT * FROM agent_templates ORDER BY is_builtin DESC, name ASC'
-        ).fetchall()
+        rows = execute_query(conn, 'SELECT * FROM agent_templates ORDER BY is_builtin DESC, name ASC')
         return [dict(row) for row in rows]
 
 def get_template_by_id(template_id):
     """Get specific template by ID"""
     with get_db() as conn:
         query = 'SELECT * FROM agent_templates WHERE id = %s' if USE_POSTGRES else 'SELECT * FROM agent_templates WHERE id = ?'
-        row = conn.execute(query, (template_id,)).fetchone()
+        row = execute_query_one(conn, query, (template_id,))
         return dict(row) if row else None
 
 def create_template(name, description, category, is_builtin=False, source_format=None, source_file_id=None, is_imported=False):
@@ -417,7 +478,7 @@ def update_template(template_id, name, description, category, source_format=None
         params.append(template_id)
         
         query = f"UPDATE agent_templates SET {', '.join(update_fields)} WHERE id = {ph}"
-        conn.execute(query, params)
+        execute_update(conn, query, params)
     
     # Auto-regenerate agent card for the updated template
     _generate_and_store_agent_card('template', template_id)
@@ -428,40 +489,32 @@ def delete_template(template_id):
     with get_db() as conn:
         # Check if builtin
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT is_builtin FROM agent_templates WHERE id = {ph}',
-            (template_id,)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT is_builtin FROM agent_templates WHERE id = {ph}', (template_id,))
 
         if row and parse_bool(row['is_builtin']):
             raise ValueError("Cannot delete builtin templates")
 
-        conn.execute(f'DELETE FROM agent_templates WHERE id = {ph}', (template_id,))
+        execute_update(conn, f'DELETE FROM agent_templates WHERE id = {ph}', (template_id,))
         return True
 
 # Agent Configurations CRUD
 def get_all_configurations():
     """Get all agent configurations with template info"""
     with get_db() as conn:
-        rows = conn.execute(
-            '''SELECT c.*, t.name as template_name
+        rows = execute_query(conn, '''SELECT c.*, t.name as template_name
                FROM agent_configurations c
                LEFT JOIN agent_templates t ON c.template_id = t.id
-               ORDER BY c.updated_at DESC'''
-        ).fetchall()
+               ORDER BY c.updated_at DESC''')
         return [dict(row) for row in rows]
 
 def get_configuration_by_id(config_id):
     """Get specific configuration by ID"""
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'''SELECT c.*, t.name as template_name
+        row = execute_query_one(conn, f'''SELECT c.*, t.name as template_name
                FROM agent_configurations c
                LEFT JOIN agent_templates t ON c.template_id = t.id
-               WHERE c.id = {ph}''',
-            (config_id,)
-        ).fetchone()
+               WHERE c.id = {ph}''', (config_id,))
         return dict(row) if row else None
 
 def create_configuration(name, template_id, config_json):
@@ -492,8 +545,7 @@ def update_configuration(config_id, name, template_id, config_json):
     """Update existing configuration"""
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(
-            f'''UPDATE agent_configurations
+        execute_update(conn, f'''UPDATE agent_configurations
                SET name = {ph}, template_id = {ph}, config_json = {ph}, updated_at = CURRENT_TIMESTAMP
                WHERE id = {ph}''',
             (name, template_id, json.dumps(config_json) if isinstance(config_json, dict) else config_json, config_id)
@@ -508,26 +560,21 @@ def delete_configuration(config_id):
     """Delete configuration"""
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(f'DELETE FROM agent_configurations WHERE id = {ph}', (config_id,))
+        execute_update(conn, f'DELETE FROM agent_configurations WHERE id = {ph}', (config_id,))
         return True
 
 # Custom Agents CRUD
 def get_all_custom_agents():
     """Get all custom agents"""
     with get_db() as conn:
-        rows = conn.execute(
-            'SELECT * FROM custom_agents ORDER BY updated_at DESC'
-        ).fetchall()
+        rows = execute_query(conn, 'SELECT * FROM custom_agents ORDER BY updated_at DESC')
         return [dict(row) for row in rows]
 
 def get_custom_agent_by_id(agent_id):
     """Get specific custom agent by ID"""
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT * FROM custom_agents WHERE id = {ph}',
-            (agent_id,)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT * FROM custom_agents WHERE id = {ph}', (agent_id,))
         return dict(row) if row else None
 
 def create_custom_agent(name, description, capabilities, tools, system_prompt, config_schema=None, source_format=None, source_file_id=None, is_imported=False):
@@ -641,7 +688,7 @@ def update_custom_agent(agent_id, name, description, capabilities, tools, system
         params.append(agent_id)
         
         query = f"UPDATE custom_agents SET {', '.join(update_fields)} WHERE id = {ph}"
-        conn.execute(query, params)
+        execute_update(conn, query, params)
     
     # Auto-regenerate agent card for the updated custom agent
     _generate_and_store_agent_card('custom_agent', agent_id)
@@ -652,7 +699,7 @@ def delete_custom_agent(agent_id):
     """Delete custom agent"""
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(f'DELETE FROM custom_agents WHERE id = {ph}', (agent_id,))
+        execute_update(conn, f'DELETE FROM custom_agents WHERE id = {ph}', (agent_id,))
         return True
 
 # File Uploads CRUD
@@ -702,10 +749,7 @@ def get_file_upload_by_id(upload_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT * FROM file_uploads WHERE id = {ph}',
-            (upload_id,)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT * FROM file_uploads WHERE id = {ph}', (upload_id,))
         return dict(row) if row else None
 
 def get_all_file_uploads(status=None, file_format=None):
@@ -736,7 +780,7 @@ def get_all_file_uploads(status=None, file_format=None):
         
         query += ' ORDER BY uploaded_at DESC'
         
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params)
         return [dict(row) for row in rows]
 
 def update_file_upload(upload_id, upload_status=None, parse_result=None, error_message=None):
@@ -777,7 +821,7 @@ def update_file_upload(upload_id, upload_status=None, parse_result=None, error_m
         
         params.append(upload_id)
         query = f"UPDATE file_uploads SET {', '.join(update_fields)} WHERE id = {ph}"
-        conn.execute(query, params)
+        execute_update(conn, query, params)
         return True
 
 def delete_file_upload(upload_id):
@@ -792,7 +836,7 @@ def delete_file_upload(upload_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(f'DELETE FROM file_uploads WHERE id = {ph}', (upload_id,))
+        execute_update(conn, f'DELETE FROM file_uploads WHERE id = {ph}', (upload_id,))
         return True
 
 # Format Conversions CRUD
@@ -844,10 +888,7 @@ def get_format_conversion_by_id(conversion_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT * FROM format_conversions WHERE id = {ph}',
-            (conversion_id,)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT * FROM format_conversions WHERE id = {ph}', (conversion_id,))
         return dict(row) if row else None
 
 def get_all_format_conversions(limit=None):
@@ -869,7 +910,7 @@ def get_all_format_conversions(limit=None):
             query += f' LIMIT {ph}'
             params.append(limit)
         
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params)
         return [dict(row) for row in rows]
 
 def get_conversions_by_formats(source_format=None, target_format=None, limit=None):
@@ -907,7 +948,7 @@ def get_conversions_by_formats(source_format=None, target_format=None, limit=Non
             query += f' LIMIT {ph}'
             params.append(limit)
         
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params)
         return [dict(row) for row in rows]
 
 def delete_format_conversion(conversion_id):
@@ -922,7 +963,7 @@ def delete_format_conversion(conversion_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(f'DELETE FROM format_conversions WHERE id = {ph}', (conversion_id,))
+        execute_update(conn, f'DELETE FROM format_conversions WHERE id = {ph}', (conversion_id,))
         return True
 
 # Agent Cards CRUD
@@ -973,10 +1014,7 @@ def get_agent_card_by_id(card_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT * FROM agent_cards WHERE id = {ph}',
-            (card_id,)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT * FROM agent_cards WHERE id = {ph}', (card_id,))
         if row:
             card_dict = dict(row)
             # Parse card_data from JSON string to dict
@@ -1001,10 +1039,7 @@ def get_agent_card_by_entity(entity_type, entity_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        row = conn.execute(
-            f'SELECT * FROM agent_cards WHERE entity_type = {ph} AND entity_id = {ph}',
-            (entity_type, entity_id)
-        ).fetchone()
+        row = execute_query_one(conn, f'SELECT * FROM agent_cards WHERE entity_type = {ph} AND entity_id = {ph}', (entity_type, entity_id))
         if row:
             card_dict = dict(row)
             # Parse card_data from JSON string to dict
@@ -1046,7 +1081,7 @@ def get_all_agent_cards(entity_type=None, published=None):
         
         query += ' ORDER BY updated_at DESC'
         
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params)
         cards = []
         for row in rows:
             card_dict = dict(row)
@@ -1087,7 +1122,7 @@ def update_agent_card(card_id, card_data=None, published=None):
         
         params.append(card_id)
         query = f"UPDATE agent_cards SET {', '.join(update_fields)} WHERE id = {ph}"
-        conn.execute(query, params)
+        execute_update(conn, query, params)
         return card_id
 
 def delete_agent_card(card_id):
@@ -1102,7 +1137,7 @@ def delete_agent_card(card_id):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        conn.execute(f'DELETE FROM agent_cards WHERE id = {ph}', (card_id,))
+        execute_update(conn, f'DELETE FROM agent_cards WHERE id = {ph}', (card_id,))
         return True
 
 def get_agent_cards_by_type(entity_type):
@@ -1117,10 +1152,7 @@ def get_agent_cards_by_type(entity_type):
     """
     with get_db() as conn:
         ph = '%s' if USE_POSTGRES else '?'
-        rows = conn.execute(
-            f'SELECT * FROM agent_cards WHERE entity_type = {ph} ORDER BY updated_at DESC',
-            (entity_type,)
-        ).fetchall()
+        rows = execute_query(conn, f'SELECT * FROM agent_cards WHERE entity_type = {ph} ORDER BY updated_at DESC', (entity_type,))
         cards = []
         for row in rows:
             card_dict = dict(row)
