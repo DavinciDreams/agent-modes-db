@@ -762,3 +762,73 @@ textarea.font-monospace {
     background-color: #fff3e0;
     color: #f57c00;
 }
+
+/* ============================================
+   Star Rating Styles
+   ============================================ */
+
+.star-rating {
+    display: inline-flex;
+    gap: 0.5rem;
+    font-size: 2rem;
+    cursor: pointer;
+}
+
+.star-rating i {
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.star-rating i:hover {
+    transform: scale(1.2);
+}
+
+.star-rating i.text-warning {
+    color: #ffc107 !important;
+}
+
+/* ============================================
+   Agent and Team Card Styles
+   ============================================ */
+
+#agentsContainer .card,
+#teamsContainer .card {
+    transition: all 0.3s ease;
+}
+
+#agentsContainer .card:hover,
+#teamsContainer .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+}
+
+#agentsContainer .card-footer,
+#teamsContainer .card-footer {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#agentsContainer .btn-group,
+#teamsContainer .btn-group {
+    box-shadow: none;
+}
+
+#selectedAgents {
+    min-height: 100px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#teamAgentResults {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+#teamAgentResults .border {
+    background-color: white;
+}
+
+#teamAgentResults .border:hover {
+    background-color: #f8f9fa;
+}

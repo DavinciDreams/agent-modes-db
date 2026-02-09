@@ -74,6 +74,376 @@ def health_check():
             }
         }), 503
 
+# ============================================
+# Agents API
+# ============================================
+
+@app.route('/api/agents', methods=['GET'])
+def get_agents():
+    """Get all agents with optional filtering"""
+    try:
+        sort_by = request.args.get('sort', 'rating')  # rating, downloads, name, date
+        order = request.args.get('order', 'desc')  # asc, desc
+        search = request.args.get('search')
+        limit = min(int(request.args.get('limit', 100)), 1000)
+
+        agents = db.get_all_agents(sort_by=sort_by, order=order, search=search, limit=limit)
+
+        # Parse JSON fields
+        for agent in agents:
+            agent['tools'] = json.loads(agent['tools']) if agent.get('tools') else []
+            agent['skills'] = json.loads(agent['skills']) if agent.get('skills') else []
+            if agent.get('allowed_edit_patterns'):
+                agent['allowed_edit_patterns'] = json.loads(agent['allowed_edit_patterns'])
+            if agent.get('metadata'):
+                agent['metadata'] = json.loads(agent['metadata'])
+
+        return jsonify({
+            'agents': agents,
+            'total': len(agents)
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_agents: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to fetch agents', 'message': str(e)}), 500
+
+@app.route('/api/agents/<int:agent_id>', methods=['GET'])
+def get_agent(agent_id):
+    """Get specific agent details"""
+    try:
+        agent = db.get_agent_by_id(agent_id)
+
+        if not agent:
+            return jsonify({'error': 'Agent not found'}), 404
+
+        # Parse JSON fields
+        agent['tools'] = json.loads(agent['tools']) if agent.get('tools') else []
+        agent['skills'] = json.loads(agent['skills']) if agent.get('skills') else []
+        if agent.get('allowed_edit_patterns'):
+            agent['allowed_edit_patterns'] = json.loads(agent['allowed_edit_patterns'])
+        if agent.get('metadata'):
+            agent['metadata'] = json.loads(agent['metadata'])
+
+        # Get ratings
+        ratings = db.get_ratings_for_entity('agent', agent_id)
+        agent['ratings'] = ratings
+
+        return jsonify(agent)
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_agent: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to fetch agent', 'message': str(e)}), 500
+
+@app.route('/api/agents', methods=['POST'])
+def create_agent():
+    """Create new agent"""
+    try:
+        config = request.json
+
+        # Validate
+        import validators
+        is_valid, errors = validators.validate_agent(config)
+        if not is_valid:
+            return jsonify({'error': 'Validation failed', 'errors': errors}), 400
+
+        # Check slug uniqueness
+        if db.get_agent_by_slug(config['slug']):
+            return jsonify({'error': 'Agent with this slug already exists'}), 409
+
+        # Create agent
+        agent_id = db.create_agent(
+            slug=config['slug'],
+            name=config['name'],
+            description=config.get('description', ''),
+            instructions=config['instructions'],
+            tools=config['tools'],
+            skills=config.get('skills', []),
+            default_model=config.get('default_model', 'sonnet'),
+            max_turns=config.get('max_turns', 50),
+            allowed_edit_patterns=config.get('allowed_edit_patterns'),
+            metadata=config.get('metadata'),
+            source_format=config.get('source_format'),
+            source_file_id=config.get('source_file_id')
+        )
+
+        agent = db.get_agent_by_id(agent_id)
+        return jsonify(agent), 201
+    except Exception as e:
+        import traceback
+        print(f"ERROR in create_agent: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to create agent', 'message': str(e)}), 500
+
+@app.route('/api/agents/<int:agent_id>/download', methods=['GET'])
+def download_agent(agent_id):
+    """Download agent in specified format"""
+    try:
+        format_type = request.args.get('format', 'universal')  # claude, roo, universal
+
+        agent = db.get_agent_by_id(agent_id)
+        if not agent:
+            return jsonify({'error': 'Agent not found'}), 404
+
+        # Parse JSON fields
+        agent['tools'] = json.loads(agent['tools']) if agent.get('tools') else []
+        agent['skills'] = json.loads(agent['skills']) if agent.get('skills') else []
+        if agent.get('allowed_edit_patterns'):
+            agent['allowed_edit_patterns'] = json.loads(agent['allowed_edit_patterns'])
+        if agent.get('metadata'):
+            agent['metadata'] = json.loads(agent['metadata'])
+
+        # Convert format if needed
+        if format_type != 'universal':
+            # Detect source format from agent data or use 'custom' as default
+            source_format = agent.get('source_format') or 'custom'
+            result, warnings = converters.UniversalConverter.convert(agent, source_format, format_type)
+
+            # If we want text output for Claude format, convert to string
+            if format_type == 'claude':
+                # Return as JSON with the serialized text
+                response = app.response_class(
+                    response=json.dumps(result),
+                    status=200,
+                    mimetype='application/json'
+                )
+                # Increment download count
+                db.increment_agent_downloads(agent_id)
+                return response
+            else:
+                agent = result
+
+        # Increment download count
+        db.increment_agent_downloads(agent_id)
+
+        return jsonify(agent)
+    except Exception as e:
+        import traceback
+        print(f"ERROR in download_agent: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to download agent', 'message': str(e)}), 500
+
+@app.route('/api/agents/<int:agent_id>/rate', methods=['POST'])
+def rate_agent(agent_id):
+    """Rate an agent"""
+    try:
+        import hashlib
+
+        # Get anonymous user identifier
+        ip = request.remote_addr
+        user_agent = request.headers.get('User-Agent', '')
+        user_id = hashlib.sha256(f"{ip}:{user_agent}".encode()).hexdigest()
+
+        rating = request.json.get('rating')
+        review = request.json.get('review', '')
+
+        # Validate rating
+        if not isinstance(rating, int) or not 1 <= rating <= 5:
+            return jsonify({'error': 'Rating must be an integer between 1 and 5'}), 400
+
+        # Check if agent exists
+        if not db.get_agent_by_id(agent_id):
+            return jsonify({'error': 'Agent not found'}), 404
+
+        # Create or update rating
+        db.create_or_update_rating('agent', agent_id, user_id, rating, review)
+
+        # Get updated agent
+        agent = db.get_agent_by_id(agent_id)
+
+        return jsonify({
+            'message': 'Rating submitted successfully',
+            'rating_average': agent['rating_average'],
+            'rating_count': agent['rating_count']
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR in rate_agent: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to submit rating', 'message': str(e)}), 500
+
+# ============================================
+# Teams API
+# ============================================
+
+@app.route('/api/teams', methods=['GET'])
+def get_teams():
+    """Get all teams"""
+    try:
+        sort_by = request.args.get('sort', 'rating')
+        order = request.args.get('order', 'desc')
+        search = request.args.get('search')
+        limit = min(int(request.args.get('limit', 100)), 1000)
+
+        teams = db.get_all_teams(sort_by=sort_by, order=order, search=search, limit=limit)
+
+        # Parse JSON fields
+        for team in teams:
+            team['agents'] = json.loads(team['agents_config']) if team.get('agents_config') else []
+            if team.get('workflow'):
+                team['workflow'] = json.loads(team['workflow'])
+            if team.get('tools'):
+                team['tools'] = json.loads(team['tools'])
+            if team.get('skills'):
+                team['skills'] = json.loads(team['skills'])
+            if team.get('metadata'):
+                team['metadata'] = json.loads(team['metadata'])
+
+            # Remove agents_config (use parsed 'agents' instead)
+            team.pop('agents_config', None)
+
+        return jsonify({
+            'teams': teams,
+            'total': len(teams)
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_teams: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to fetch teams', 'message': str(e)}), 500
+
+@app.route('/api/teams/<int:team_id>', methods=['GET'])
+def get_team(team_id):
+    """Get specific team details"""
+    try:
+        team = db.get_team_by_id(team_id)
+
+        if not team:
+            return jsonify({'error': 'Team not found'}), 404
+
+        # Parse JSON fields
+        team['agents'] = json.loads(team['agents_config']) if team.get('agents_config') else []
+        if team.get('workflow'):
+            team['workflow'] = json.loads(team['workflow'])
+        if team.get('tools'):
+            team['tools'] = json.loads(team['tools'])
+        if team.get('skills'):
+            team['skills'] = json.loads(team['skills'])
+        if team.get('metadata'):
+            team['metadata'] = json.loads(team['metadata'])
+
+        team.pop('agents_config', None)
+
+        # Get ratings
+        ratings = db.get_ratings_for_entity('team', team_id)
+        team['ratings'] = ratings
+
+        return jsonify(team)
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_team: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to fetch team', 'message': str(e)}), 500
+
+@app.route('/api/teams', methods=['POST'])
+def create_team():
+    """Create new team"""
+    try:
+        config = request.json
+
+        # Validate
+        import validators
+        is_valid, errors = validators.validate_team(config, agent_exists_fn=db.agent_exists)
+        if not is_valid:
+            return jsonify({'error': 'Validation failed', 'errors': errors}), 400
+
+        # Check slug uniqueness
+        if db.get_team_by_slug(config['slug']):
+            return jsonify({'error': 'Team with this slug already exists'}), 409
+
+        # Create team
+        team_id = db.create_team(
+            slug=config['slug'],
+            name=config['name'],
+            description=config.get('description', ''),
+            agents_config=config['agents'],
+            orchestrator=config.get('orchestrator'),
+            version=config.get('version', '1.0.0'),
+            workflow=config.get('workflow'),
+            tools=config.get('tools'),
+            skills=config.get('skills'),
+            metadata=config.get('metadata')
+        )
+
+        team = db.get_team_by_id(team_id)
+        return jsonify(team), 201
+    except Exception as e:
+        import traceback
+        print(f"ERROR in create_team: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to create team', 'message': str(e)}), 500
+
+@app.route('/api/teams/<int:team_id>/download', methods=['GET'])
+def download_team(team_id):
+    """Download team package"""
+    try:
+        team = db.get_team_by_id(team_id)
+        if not team:
+            return jsonify({'error': 'Team not found'}), 404
+
+        # Parse JSON fields
+        team['agents'] = json.loads(team['agents_config']) if team.get('agents_config') else []
+        if team.get('workflow'):
+            team['workflow'] = json.loads(team['workflow'])
+        if team.get('tools'):
+            team['tools'] = json.loads(team['tools'])
+        if team.get('skills'):
+            team['skills'] = json.loads(team['skills'])
+        if team.get('metadata'):
+            team['metadata'] = json.loads(team['metadata'])
+
+        team.pop('agents_config', None)
+
+        # Increment download count
+        db.increment_team_downloads(team_id)
+
+        return jsonify(team)
+    except Exception as e:
+        import traceback
+        print(f"ERROR in download_team: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to download team', 'message': str(e)}), 500
+
+@app.route('/api/teams/<int:team_id>/rate', methods=['POST'])
+def rate_team(team_id):
+    """Rate a team"""
+    try:
+        import hashlib
+
+        # Get anonymous user identifier
+        ip = request.remote_addr
+        user_agent = request.headers.get('User-Agent', '')
+        user_id = hashlib.sha256(f"{ip}:{user_agent}".encode()).hexdigest()
+
+        rating = request.json.get('rating')
+        review = request.json.get('review', '')
+
+        # Validate rating
+        if not isinstance(rating, int) or not 1 <= rating <= 5:
+            return jsonify({'error': 'Rating must be an integer between 1 and 5'}), 400
+
+        # Check if team exists
+        if not db.get_team_by_id(team_id):
+            return jsonify({'error': 'Team not found'}), 404
+
+        # Create or update rating
+        db.create_or_update_rating('team', team_id, user_id, rating, review)
+
+        # Get updated team
+        team = db.get_team_by_id(team_id)
+
+        return jsonify({
+            'message': 'Rating submitted successfully',
+            'rating_average': team['rating_average'],
+            'rating_count': team['rating_count']
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR in rate_team: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Failed to submit rating', 'message': str(e)}), 500
+
 # API Error handler
 @app.errorhandler(Exception)
 def handle_error(e):

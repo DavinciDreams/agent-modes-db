@@ -156,17 +156,18 @@ def execute_query_one(conn, query, params=None):
     """
     Execute a SELECT query and return a single result.
     Works for both SQLite and Postgres.
-    
+
     Args:
         conn: Database connection
         query: SQL query string
         params: Query parameters (optional)
-    
+
     Returns:
         Result of fetchone() for SELECT queries
     """
     if USE_POSTGRES:
-        cursor = conn.cursor()
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(query, params or ())
         return cursor.fetchone()
     else:
@@ -179,14 +180,15 @@ def execute_update(conn, query, params=None):
     """
     Execute an INSERT/UPDATE/DELETE query.
     Works for both SQLite and Postgres.
-    
+
     Args:
         conn: Database connection
         query: SQL query string
         params: Query parameters (optional)
     """
     if USE_POSTGRES:
-        cursor = conn.cursor()
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(query, params or ())
     else:
         if params:
@@ -252,7 +254,8 @@ def init_db():
     migrations = [
         '001_add_file_upload_support.sql',
         '002_add_format_conversions.sql',
-        '003_add_agent_cards.sql'
+        '003_add_agent_cards.sql',
+        '004_add_agents_teams.sql'
     ]
     
     for migration_file in migrations:
@@ -1184,10 +1187,10 @@ def delete_agent_card(card_id):
 def get_agent_cards_by_type(entity_type):
     """
     Get agent cards filtered by entity type
-    
+
     Args:
         entity_type: Entity type ('template', 'configuration', 'custom_agent')
-    
+
     Returns:
         list: List of agent card dictionaries
     """
@@ -1210,17 +1213,17 @@ def get_agent_cards_by_type(entity_type):
 def _generate_and_store_agent_card(entity_type, entity_id):
     """
     Generate and store an agent card for an entity
-    
+
     Args:
         entity_type: Entity type ('template', 'configuration', 'custom_agent')
         entity_id: Entity ID
-    
+
     Returns:
         int: The ID of the created/updated agent card or None if failed
     """
     try:
         import generators
-        
+
         # Get entity data
         if entity_type == 'template':
             entity_data = get_template_by_id(entity_id)
@@ -1236,13 +1239,13 @@ def _generate_and_store_agent_card(entity_type, entity_id):
                 card_data = generators.AgentCardGenerator.generate_from_custom_agent(entity_data)
         else:
             return None
-        
+
         if not entity_data:
             return None
-        
+
         # Check if card already exists
         existing_card = get_agent_card_by_entity(entity_type, entity_id)
-        
+
         if existing_card:
             # Update existing card
             update_agent_card(existing_card['id'], card_data=card_data)
@@ -1254,3 +1257,282 @@ def _generate_and_store_agent_card(entity_type, entity_id):
         # Log error but don't raise - agent card generation should not block entity creation
         print(f"Error generating agent card for {entity_type} {entity_id}: {e}")
         return None
+
+# ============================================
+# Agents CRUD
+# ============================================
+
+def get_all_agents(sort_by='rating', order='desc', search=None, limit=100):
+    """Get all agents with optional filtering and sorting"""
+    with get_db() as conn:
+        query = 'SELECT * FROM agents WHERE is_public = ' + ('TRUE' if USE_POSTGRES else '1')
+        params = []
+
+        if search:
+            ph = '%s' if USE_POSTGRES else '?'
+            query += f' AND (name LIKE {ph} OR description LIKE {ph})'
+            search_term = f'%{search}%'
+            params.extend([search_term, search_term])
+
+        # Sorting
+        sort_column = {
+            'rating': 'rating_average',
+            'downloads': 'download_count',
+            'name': 'name',
+            'date': 'created_at'
+        }.get(sort_by, 'rating_average')
+
+        order_dir = 'DESC' if order == 'desc' else 'ASC'
+        query += f' ORDER BY {sort_column} {order_dir}, id DESC'
+        query += f' LIMIT {int(limit)}'
+
+        rows = execute_query(conn, query, params)
+        return [dict(row) for row in rows]
+
+def get_agent_by_id(agent_id):
+    """Get specific agent by ID"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        row = execute_query_one(conn, f'SELECT * FROM agents WHERE id = {ph}', (agent_id,))
+        return dict(row) if row else None
+
+def get_agent_by_slug(slug):
+    """Get specific agent by slug"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        row = execute_query_one(conn, f'SELECT * FROM agents WHERE slug = {ph}', (slug,))
+        return dict(row) if row else None
+
+def create_agent(slug, name, description, instructions, tools, skills=None,
+                default_model='sonnet', max_turns=50, allowed_edit_patterns=None,
+                metadata=None, source_format=None, source_file_id=None):
+    """Create new agent"""
+    with get_db() as conn:
+        tools_json = json.dumps(tools)
+        skills_json = json.dumps(skills) if skills else None
+        patterns_json = json.dumps(allowed_edit_patterns) if allowed_edit_patterns else None
+        metadata_json = json.dumps(metadata) if metadata else None
+
+        if USE_POSTGRES:
+            query = '''INSERT INTO agents
+                       (slug, name, description, instructions, tools, skills, default_model,
+                        max_turns, allowed_edit_patterns, metadata, source_format, source_file_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id'''
+            params = (slug, name, description, instructions, tools_json, skills_json,
+                     default_model, max_turns, patterns_json, metadata_json, source_format, source_file_id)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return result['id']
+        else:
+            query = '''INSERT INTO agents
+                       (slug, name, description, instructions, tools, skills, default_model,
+                        max_turns, allowed_edit_patterns, metadata, source_format, source_file_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+            params = (slug, name, description, instructions, tools_json, skills_json,
+                     default_model, max_turns, patterns_json, metadata_json, source_format, source_file_id)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return cursor.lastrowid
+
+def update_agent(agent_id, **kwargs):
+    """Update agent fields"""
+    with get_db() as conn:
+        # Build SET clause dynamically
+        set_clauses = []
+        params = []
+        ph = '%s' if USE_POSTGRES else '?'
+
+        for key, value in kwargs.items():
+            if key in ['tools', 'skills', 'allowed_edit_patterns', 'metadata']:
+                value = json.dumps(value) if value else None
+            set_clauses.append(f'{key} = {ph}')
+            params.append(value)
+
+        if not set_clauses:
+            return True
+
+        params.append(agent_id)
+        query = f"UPDATE agents SET {', '.join(set_clauses)} WHERE id = {ph}"
+        execute_query(conn, query, params)
+        return True
+
+def delete_agent(agent_id):
+    """Delete agent"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        execute_query(conn, f'DELETE FROM agents WHERE id = {ph}', (agent_id,))
+
+def increment_agent_downloads(agent_id):
+    """Increment agent download count"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        execute_update(conn, f'UPDATE agents SET download_count = download_count + 1 WHERE id = {ph}', (agent_id,))
+
+def agent_exists(slug):
+    """Check if agent exists by slug"""
+    agent = get_agent_by_slug(slug)
+    return agent is not None
+
+# ============================================
+# Teams CRUD
+# ============================================
+
+def get_all_teams(sort_by='rating', order='desc', search=None, limit=100):
+    """Get all teams with optional filtering and sorting"""
+    with get_db() as conn:
+        query = 'SELECT * FROM teams'
+        params = []
+
+        if search:
+            ph = '%s' if USE_POSTGRES else '?'
+            query += f' WHERE (name LIKE {ph} OR description LIKE {ph})'
+            search_term = f'%{search}%'
+            params.extend([search_term, search_term])
+
+        # Sorting
+        sort_column = {
+            'rating': 'rating_average',
+            'downloads': 'download_count',
+            'name': 'name',
+            'date': 'created_at'
+        }.get(sort_by, 'rating_average')
+
+        order_dir = 'DESC' if order == 'desc' else 'ASC'
+        query += f' ORDER BY {sort_column} {order_dir}, id DESC'
+        query += f' LIMIT {int(limit)}'
+
+        rows = execute_query(conn, query, params)
+        return [dict(row) for row in rows]
+
+def get_team_by_id(team_id):
+    """Get specific team by ID"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        row = execute_query_one(conn, f'SELECT * FROM teams WHERE id = {ph}', (team_id,))
+        return dict(row) if row else None
+
+def get_team_by_slug(slug):
+    """Get specific team by slug"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        row = execute_query_one(conn, f'SELECT * FROM teams WHERE slug = {ph}', (slug,))
+        return dict(row) if row else None
+
+def create_team(slug, name, description, agents_config, orchestrator=None,
+               version='1.0.0', workflow=None, tools=None, skills=None, metadata=None):
+    """Create new team"""
+    with get_db() as conn:
+        agents_json = json.dumps(agents_config)
+        workflow_json = json.dumps(workflow) if workflow else None
+        tools_json = json.dumps(tools) if tools else None
+        skills_json = json.dumps(skills) if skills else None
+        metadata_json = json.dumps(metadata) if metadata else None
+
+        if USE_POSTGRES:
+            query = '''INSERT INTO teams
+                       (slug, name, description, version, orchestrator, agents_config,
+                        workflow, tools, skills, metadata)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id'''
+            params = (slug, name, description, version, orchestrator, agents_json,
+                     workflow_json, tools_json, skills_json, metadata_json)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return result['id']
+        else:
+            query = '''INSERT INTO teams
+                       (slug, name, description, version, orchestrator, agents_config,
+                        workflow, tools, skills, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+            params = (slug, name, description, version, orchestrator, agents_json,
+                     workflow_json, tools_json, skills_json, metadata_json)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return cursor.lastrowid
+
+def increment_team_downloads(team_id):
+    """Increment team download count"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        execute_update(conn, f'UPDATE teams SET download_count = download_count + 1 WHERE id = {ph}', (team_id,))
+
+# ============================================
+# Ratings
+# ============================================
+
+def create_or_update_rating(entity_type, entity_id, user_identifier, rating, review=None):
+    """Create or update rating"""
+    with get_db() as conn:
+        if USE_POSTGRES:
+            from psycopg2.extras import RealDictCursor
+            query = '''INSERT INTO ratings (entity_type, entity_id, user_identifier, rating, review)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (entity_type, entity_id, user_identifier)
+                       DO UPDATE SET rating = EXCLUDED.rating, review = EXCLUDED.review,
+                                     updated_at = CURRENT_TIMESTAMP
+                       RETURNING id'''
+            params = (entity_type, entity_id, user_identifier, rating, review)
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            rating_id = result['id']
+        else:
+            # SQLite: Try insert, if fails do update
+            try:
+                query = '''INSERT INTO ratings (entity_type, entity_id, user_identifier, rating, review)
+                           VALUES (?, ?, ?, ?, ?)'''
+                params = (entity_type, entity_id, user_identifier, rating, review)
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rating_id = cursor.lastrowid
+            except:
+                query = '''UPDATE ratings SET rating = ?, review = ?, updated_at = CURRENT_TIMESTAMP
+                           WHERE entity_type = ? AND entity_id = ? AND user_identifier = ?'''
+                params = (rating, review, entity_type, entity_id, user_identifier)
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rating_id = None
+
+        # Update average rating (pass conn to avoid nested transaction)
+        _update_rating_average_internal(conn, entity_type, entity_id)
+        return rating_id
+
+def _update_rating_average_internal(conn, entity_type, entity_id):
+    """Internal helper to update rating average using existing connection"""
+    ph = '%s' if USE_POSTGRES else '?'
+
+    # Get average and count
+    query = f'''SELECT AVG(rating) as avg_rating, COUNT(*) as count
+                FROM ratings
+                WHERE entity_type = {ph} AND entity_id = {ph}'''
+    result = execute_query_one(conn, query, (entity_type, entity_id))
+
+    if result:
+        # For Postgres (RealDictCursor), use dict keys; for SQLite, use tuple indices
+        if USE_POSTGRES:
+            avg_rating = float(result['avg_rating'] or 0)
+            count = int(result['count'] or 0)
+        else:
+            avg_rating = float(result[0] or 0)
+            count = int(result[1] or 0)
+
+        # Update entity table
+        table = 'agents' if entity_type == 'agent' else 'teams'
+        query = f'UPDATE {table} SET rating_average = {ph}, rating_count = {ph} WHERE id = {ph}'
+        execute_update(conn, query, (avg_rating, count, entity_id))
+
+def update_rating_average(entity_type, entity_id):
+    """Recalculate and update average rating for entity"""
+    with get_db() as conn:
+        _update_rating_average_internal(conn, entity_type, entity_id)
+
+def get_ratings_for_entity(entity_type, entity_id):
+    """Get all ratings for an entity"""
+    with get_db() as conn:
+        ph = '%s' if USE_POSTGRES else '?'
+        query = f'SELECT * FROM ratings WHERE entity_type = {ph} AND entity_id = {ph} ORDER BY created_at DESC'
+        rows = execute_query(conn, query, (entity_type, entity_id))
+        return [dict(row) for row in rows]

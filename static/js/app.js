@@ -18,9 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(tab => {
         tab.addEventListener('shown.bs.tab', (e) => {
             const target = e.target.getAttribute('data-bs-target');
-            if (target === '#templates') loadTemplates();
+            if (target === '#agents') loadAgents();
+            else if (target === '#teams') loadTeams();
+            else if (target === '#templates') loadTemplates();
             else if (target === '#configurations') loadConfigurations();
-            else if (target === '#custom-agents') loadCustomAgents();
+            else if (target === '#create-agents') loadCustomAgents();
             else if (target === '#import-convert') {
                 loadRecentUploads();
                 loadRecentConversions();
@@ -1334,5 +1336,483 @@ async function deleteCustomAgent(id) {
         loadCustomAgents();
     } catch (error) {
         showToast('Error: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// Agents Page
+// ============================================
+
+let currentAgentSort = 'rating';
+let currentAgentOrder = 'desc';
+
+async function loadAgents() {
+    try {
+        const response = await fetch(`/api/agents?sort=${currentAgentSort}&order=${currentAgentOrder}`);
+        const data = await response.json();
+        renderAgents(data.agents || []);
+    } catch (error) {
+        console.error('Error loading agents:', error);
+        showToast('Failed to load agents', 'error');
+    }
+}
+
+function renderAgents(agents) {
+    const container = document.getElementById('agentsContainer');
+
+    if (agents.length === 0) {
+        container.innerHTML = '<div class="col-12 text-center text-muted">No agents found</div>';
+        return;
+    }
+
+    container.innerHTML = agents.map(agent => `
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">🤖 ${agent.name}</h5>
+                    <p class="card-text text-muted">${agent.description || 'No description'}</p>
+
+                    <div class="mb-2">
+                        <span class="badge bg-primary">${agent.tools?.length || 0} tools</span>
+                        <span class="badge bg-info">${agent.default_model}</span>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            ${renderStars(agent.rating_average || 0)}
+                            <small class="text-muted">(${agent.rating_count || 0})</small>
+                        </div>
+                        <div>
+                            <small><i class="fas fa-download"></i> ${agent.download_count || 0}</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-transparent">
+                    <button class="btn btn-sm btn-outline-primary" onclick="viewAgent(${agent.id})">
+                        <i class="fas fa-eye"></i> Details
+                    </button>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-success dropdown-toggle" data-bs-toggle="dropdown">
+                            <i class="fas fa-download"></i> Download
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#" onclick="downloadAgent(${agent.id}, 'claude')">Claude Format</a></li>
+                            <li><a class="dropdown-item" href="#" onclick="downloadAgent(${agent.id}, 'roo')">Roo Format</a></li>
+                            <li><a class="dropdown-item" href="#" onclick="downloadAgent(${agent.id}, 'universal')">Universal</a></li>
+                        </ul>
+                    </div>
+                    <button class="btn btn-sm btn-warning" onclick="showRatingModal('agent', ${agent.id}, '${agent.name}')">
+                        <i class="fas fa-star"></i> Rate
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderStars(rating) {
+    const fullStars = Math.floor(rating);
+    const halfStar = rating % 1 >= 0.5;
+    let stars = '';
+
+    for (let i = 0; i < fullStars; i++) {
+        stars += '<i class="fas fa-star text-warning"></i>';
+    }
+    if (halfStar) {
+        stars += '<i class="fas fa-star-half-alt text-warning"></i>';
+    }
+    for (let i = fullStars + (halfStar ? 1 : 0); i < 5; i++) {
+        stars += '<i class="far fa-star text-warning"></i>';
+    }
+
+    return stars;
+}
+
+function sortAgents(sortBy) {
+    currentAgentSort = sortBy;
+    loadAgents();
+}
+
+async function searchAgents() {
+    const query = document.getElementById('agentSearch').value;
+    try {
+        const response = await fetch(`/api/agents?search=${encodeURIComponent(query)}&sort=${currentAgentSort}`);
+        const data = await response.json();
+        renderAgents(data.agents || []);
+    } catch (error) {
+        console.error('Error searching agents:', error);
+        showToast('Search failed', 'error');
+    }
+}
+
+async function viewAgent(agentId) {
+    try {
+        const response = await fetch(`/api/agents/${agentId}`);
+        const agent = await response.json();
+
+        document.getElementById('agentDetailTitle').textContent = agent.name;
+        document.getElementById('agentDetailBody').innerHTML = `
+            <p><strong>Slug:</strong> ${agent.slug}</p>
+            <p><strong>Description:</strong> ${agent.description || 'No description'}</p>
+            <p><strong>Model:</strong> ${agent.default_model}</p>
+            <p><strong>Max Turns:</strong> ${agent.max_turns}</p>
+
+            <h6>Tools:</h6>
+            <p>${(agent.tools || []).map(t => `<span class="badge bg-primary">${t}</span>`).join(' ')}</p>
+
+            ${agent.skills?.length ? `<h6>Skills:</h6><p>${agent.skills.map(s => `<span class="badge bg-info">${s}</span>`).join(' ')}</p>` : ''}
+
+            <h6>Instructions:</h6>
+            <pre class="bg-light p-2" style="max-height: 300px; overflow-y: auto;">${agent.instructions}</pre>
+
+            <h6>Ratings:</h6>
+            <div>${renderStars(agent.rating_average || 0)} (${agent.rating_count || 0} ratings)</div>
+
+            ${(agent.ratings || []).length > 0 ? `
+                <div class="mt-3">
+                    <h6>Reviews:</h6>
+                    ${agent.ratings.slice(0, 5).map(r => `
+                        <div class="border-bottom pb-2 mb-2">
+                            <div>${renderStars(r.rating)}</div>
+                            ${r.review ? `<p class="mb-0 small">${r.review}</p>` : ''}
+                            <small class="text-muted">${new Date(r.created_at).toLocaleDateString()}</small>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+        `;
+
+        new bootstrap.Modal(document.getElementById('agentDetailModal')).show();
+    } catch (error) {
+        console.error('Error loading agent:', error);
+        showToast('Failed to load agent details', 'error');
+    }
+}
+
+async function downloadAgent(agentId, format) {
+    try {
+        const response = await fetch(`/api/agents/${agentId}/download?format=${format}`);
+        const agent = await response.json();
+
+        const blob = new Blob([JSON.stringify(agent, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${agent.slug || 'agent'}.${format}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        showToast(`Downloaded ${agent.name} in ${format} format`, 'success');
+    } catch (error) {
+        console.error('Error downloading agent:', error);
+        showToast('Download failed', 'error');
+    }
+}
+
+// ============================================
+// Teams Page
+// ============================================
+
+let currentTeamSort = 'rating';
+
+async function loadTeams() {
+    try {
+        const response = await fetch(`/api/teams?sort=${currentTeamSort}`);
+        const data = await response.json();
+        renderTeams(data.teams || []);
+    } catch (error) {
+        console.error('Error loading teams:', error);
+        showToast('Failed to load teams', 'error');
+    }
+}
+
+function renderTeams(teams) {
+    const container = document.getElementById('teamsContainer');
+
+    if (teams.length === 0) {
+        container.innerHTML = '<div class="col-12 text-center text-muted">No teams found</div>';
+        return;
+    }
+
+    container.innerHTML = teams.map(team => `
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">👥 ${team.name}</h5>
+                    <p class="card-text text-muted">${team.description || 'No description'}</p>
+
+                    <div class="mb-2">
+                        <span class="badge bg-success">${team.agents?.length || 0} agents</span>
+                        ${team.orchestrator ? `<span class="badge bg-info">Orchestrated</span>` : ''}
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            ${renderStars(team.rating_average || 0)}
+                            <small class="text-muted">(${team.rating_count || 0})</small>
+                        </div>
+                        <div>
+                            <small><i class="fas fa-download"></i> ${team.download_count || 0}</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-transparent">
+                    <button class="btn btn-sm btn-outline-primary" onclick="viewTeam(${team.id})">
+                        <i class="fas fa-eye"></i> Details
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="downloadTeam(${team.id})">
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                    <button class="btn btn-sm btn-warning" onclick="showRatingModal('team', ${team.id}, '${team.name}')">
+                        <i class="fas fa-star"></i> Rate
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function sortTeams(sortBy) {
+    currentTeamSort = sortBy;
+    loadTeams();
+}
+
+async function viewTeam(teamId) {
+    try {
+        const response = await fetch(`/api/teams/${teamId}`);
+        const team = await response.json();
+
+        document.getElementById('teamDetailTitle').textContent = team.name;
+        document.getElementById('teamDetailBody').innerHTML = `
+            <p><strong>Slug:</strong> ${team.slug}</p>
+            <p><strong>Description:</strong> ${team.description || 'No description'}</p>
+            <p><strong>Version:</strong> ${team.version || '1.0.0'}</p>
+            ${team.orchestrator ? `<p><strong>Orchestrator:</strong> ${team.orchestrator}</p>` : ''}
+
+            <h6>Agents (${team.agents?.length || 0}):</h6>
+            <ul>
+                ${(team.agents || []).map(a => `<li>${a.slug}${a.role ? ` - ${a.role}` : ''}</li>`).join('')}
+            </ul>
+
+            ${team.workflow ? `
+                <h6>Workflow:</h6>
+                <p><strong>Type:</strong> ${team.workflow.type}</p>
+                ${team.workflow.stages ? `<p><strong>Stages:</strong> ${team.workflow.stages.join(' → ')}</p>` : ''}
+            ` : ''}
+
+            <h6>Ratings:</h6>
+            <div>${renderStars(team.rating_average || 0)} (${team.rating_count || 0} ratings)</div>
+        `;
+
+        new bootstrap.Modal(document.getElementById('teamDetailModal')).show();
+    } catch (error) {
+        console.error('Error loading team:', error);
+        showToast('Failed to load team details', 'error');
+    }
+}
+
+async function downloadTeam(teamId) {
+    try {
+        const response = await fetch(`/api/teams/${teamId}/download`);
+        const team = await response.json();
+
+        const blob = new Blob([JSON.stringify(team, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${team.slug || 'team'}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        showToast(`Downloaded ${team.name}`, 'success');
+    } catch (error) {
+        console.error('Error downloading team:', error);
+        showToast('Download failed', 'error');
+    }
+}
+
+// ============================================
+// Create Team Modal
+// ============================================
+
+let selectedTeamAgents = [];
+
+function showCreateTeamModal() {
+    selectedTeamAgents = [];
+    document.getElementById('createTeamForm').reset();
+    document.getElementById('selectedAgentsList').innerHTML = '';
+    new bootstrap.Modal(document.getElementById('createTeamModal')).show();
+}
+
+async function searchAgentsForTeam() {
+    const query = document.getElementById('teamAgentSearch').value;
+    try {
+        const response = await fetch(`/api/agents?search=${encodeURIComponent(query)}&limit=10`);
+        const data = await response.json();
+
+        const results = document.getElementById('teamAgentResults');
+        results.innerHTML = data.agents.map(agent => `
+            <div class="border p-2 mb-1 d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>${agent.name}</strong>
+                    <small class="text-muted d-block">${agent.description || ''}</small>
+                </div>
+                <button class="btn btn-sm btn-primary" onclick="addAgentToTeam('${agent.slug}', '${agent.name}')">
+                    <i class="fas fa-plus"></i> Add
+                </button>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error searching agents:', error);
+    }
+}
+
+function addAgentToTeam(slug, name) {
+    if (selectedTeamAgents.find(a => a.slug === slug)) {
+        showToast('Agent already added', 'info');
+        return;
+    }
+
+    selectedTeamAgents.push({ slug, name, role: '' });
+    updateSelectedAgentsList();
+}
+
+function removeAgentFromTeam(slug) {
+    selectedTeamAgents = selectedTeamAgents.filter(a => a.slug !== slug);
+    updateSelectedAgentsList();
+}
+
+function updateSelectedAgentsList() {
+    const list = document.getElementById('selectedAgentsList');
+
+    if (selectedTeamAgents.length === 0) {
+        list.innerHTML = '<p class="text-muted mb-0">No agents selected</p>';
+        return;
+    }
+
+    list.innerHTML = selectedTeamAgents.map((agent, i) => `
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="flex-grow-1">
+                <strong>${agent.name}</strong>
+                <input type="text" class="form-control form-control-sm mt-1" placeholder="Role (e.g., Frontend Developer)"
+                       onchange="selectedTeamAgents[${i}].role = this.value">
+            </div>
+            <button class="btn btn-sm btn-danger ms-2" onclick="removeAgentFromTeam('${agent.slug}')">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function saveTeam() {
+    const slug = document.getElementById('teamSlug').value;
+    const name = document.getElementById('teamName').value;
+    const description = document.getElementById('teamDescription').value;
+
+    if (!slug || !name || selectedTeamAgents.length === 0) {
+        showToast('Please fill required fields and add at least one agent', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/teams', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slug,
+                name,
+                description,
+                agents: selectedTeamAgents
+            })
+        });
+
+        if (response.ok) {
+            showToast('Team created successfully!', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('createTeamModal')).hide();
+            loadTeams();
+        } else {
+            const error = await response.json();
+            showToast('Failed to create team: ' + (error.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error creating team:', error);
+        showToast('Failed to create team', 'error');
+    }
+}
+
+// ============================================
+// Rating System
+// ============================================
+
+let currentRatingEntity = { type: '', id: 0, name: '' };
+let selectedRating = 0;
+
+function showRatingModal(entityType, entityId, entityName) {
+    currentRatingEntity = { type: entityType, id: entityId, name: entityName };
+    selectedRating = 0;
+
+    document.getElementById('ratingEntityName').textContent = entityName;
+    document.getElementById('ratingReview').value = '';
+
+    // Reset stars
+    document.querySelectorAll('#starRating i').forEach(star => {
+        star.className = 'far fa-star';
+    });
+
+    // Add click handlers
+    document.querySelectorAll('#starRating i').forEach((star, index) => {
+        star.onclick = () => selectStar(index + 1);
+        star.onmouseover = () => hoverStars(index + 1);
+    });
+
+    document.getElementById('starRating').onmouseleave = () => hoverStars(selectedRating);
+
+    new bootstrap.Modal(document.getElementById('ratingModal')).show();
+}
+
+function selectStar(rating) {
+    selectedRating = rating;
+    hoverStars(rating);
+}
+
+function hoverStars(rating) {
+    document.querySelectorAll('#starRating i').forEach((star, index) => {
+        star.className = index < rating ? 'fas fa-star text-warning' : 'far fa-star';
+    });
+}
+
+async function submitRating() {
+    if (selectedRating === 0) {
+        showToast('Please select a rating', 'info');
+        return;
+    }
+
+    const review = document.getElementById('ratingReview').value;
+
+    try {
+        const url = `/api/${currentRatingEntity.type}s/${currentRatingEntity.id}/rate`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rating: selectedRating, review })
+        });
+
+        if (response.ok) {
+            showToast('Rating submitted successfully!', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('ratingModal')).hide();
+
+            // Reload the appropriate list
+            if (currentRatingEntity.type === 'agent') {
+                loadAgents();
+            } else {
+                loadTeams();
+            }
+        } else {
+            const error = await response.json();
+            showToast('Failed to submit rating: ' + (error.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error submitting rating:', error);
+        showToast('Failed to submit rating', 'error');
     }
 }

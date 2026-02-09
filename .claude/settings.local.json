@@ -3,7 +3,12 @@
     "allow": [
       "Bash(test:*)",
       "Bash(python -m py_compile:*)",
-      "Bash(python -m json.tool:*)"
+      "Bash(python -m json.tool:*)",
+      "Bash(git add:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(pkill:*)",
+      "Bash(xargs kill:*)"
     ]
   }
 }
