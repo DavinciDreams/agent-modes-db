@@ -820,8 +820,18 @@ async function uploadFiles() {
                 bootstrap.Modal.getInstance(document.getElementById('fileUploadModal')).hide();
                 loadRecentUploads();
             } else {
-                const error = JSON.parse(xhr.responseText);
-                showToast('Upload failed: ' + (error.error || 'Unknown error'), 'error');
+                // Log the full error for debugging
+                console.error('Upload failed with status:', xhr.status);
+                console.error('Response text:', xhr.responseText);
+
+                try {
+                    const error = JSON.parse(xhr.responseText);
+                    const errorMsg = error.error || error.message || JSON.stringify(error) || 'Unknown error';
+                    showToast('Upload failed: ' + errorMsg, 'error');
+                } catch (parseError) {
+                    console.error('Error parsing error response:', parseError);
+                    showToast('Upload failed: ' + (xhr.responseText || 'Unknown error - check console'), 'error');
+                }
             }
             document.getElementById('uploadProgress').style.display = 'none';
         });

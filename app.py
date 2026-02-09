@@ -43,6 +43,37 @@ else:
 def index():
     return render_template('index.html')
 
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint to verify database connectivity"""
+    try:
+        with db.get_db() as conn:
+            cursor = conn.cursor()
+            if db.USE_POSTGRES:
+                cursor.execute('SELECT 1')
+            else:
+                cursor.execute('SELECT 1')
+
+        return jsonify({
+            'status': 'healthy',
+            'database': {
+                'type': db.get_db_type(),
+                'connected': True
+            }
+        }), 200
+    except Exception as e:
+        import traceback
+        print(f"Health check failed: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            'status': 'unhealthy',
+            'database': {
+                'type': db.get_db_type(),
+                'connected': False,
+                'error': str(e)
+            }
+        }), 503
+
 # API Error handler
 @app.errorhandler(Exception)
 def handle_error(e):
@@ -518,6 +549,9 @@ def upload_multiple_files():
             successful += 1
             
         except ValueError as e:
+            import traceback
+            print(f"ERROR: ValueError uploading file {original_filename}: {str(e)}")
+            print(f"Full traceback:\n{traceback.format_exc()}")
             stored_filename = utils.sanitize_filename(original_filename)
             file_format = parsers.detect_format(original_filename)
             db.create_file_upload(
@@ -535,6 +569,9 @@ def upload_multiple_files():
             })
             failed += 1
         except Exception as e:
+            import traceback
+            print(f"ERROR: Exception uploading file {original_filename}: {str(e)}")
+            print(f"Full traceback:\n{traceback.format_exc()}")
             results.append({
                 'filename': original_filename,
                 'status': 'failed',
