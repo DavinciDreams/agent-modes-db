@@ -806,11 +806,19 @@ def upload_file():
 
             # Validate agent data
             import validators
+            # For instructions, try multiple fields in order of preference
+            instructions = (
+                normalized_data.get('instructions') or
+                normalized_data.get('system_prompt') or
+                normalized_data.get('body') or
+                normalized_data.get('description', '')
+            )
+
             agent_config = {
                 'slug': slug,
                 'name': normalized_data.get('name', base_name.replace('-', ' ').title()),
-                'description': normalized_data.get('description', ''),
-                'instructions': normalized_data.get('instructions') or normalized_data.get('system_prompt', ''),
+                'description': normalized_data.get('description', '')[:500] if normalized_data.get('description') else '',
+                'instructions': instructions,
                 'tools': normalized_data.get('tools', []),
                 'skills': normalized_data.get('skills', []),
                 'default_model': normalized_data.get('default_model', 'sonnet'),
@@ -983,11 +991,19 @@ def upload_multiple_files():
                 agent_format = parsers.detect_agent_format(content)
 
                 # Build agent config
+                # For instructions, try multiple fields in order of preference
+                instructions = (
+                    normalized_data.get('instructions') or
+                    normalized_data.get('system_prompt') or
+                    normalized_data.get('body') or
+                    normalized_data.get('description', '')
+                )
+
                 agent_config = {
                     'slug': slug,
                     'name': normalized_data.get('name', base_name.replace('-', ' ').title()),
-                    'description': normalized_data.get('description', ''),
-                    'instructions': normalized_data.get('instructions') or normalized_data.get('system_prompt', ''),
+                    'description': normalized_data.get('description', '')[:500] if normalized_data.get('description') else '',
+                    'instructions': instructions,
                     'tools': normalized_data.get('tools', []),
                     'skills': normalized_data.get('skills', []),
                     'default_model': normalized_data.get('default_model', 'sonnet'),
