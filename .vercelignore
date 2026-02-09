@@ -5,7 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
-.git
+.git/
 .gitignore
 .env
 test_*.py

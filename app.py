@@ -13,6 +13,14 @@ app = Flask(__name__)
 def log_request():
     print(f"Request: {request.method} {request.path} from {request.remote_addr}")
 
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers to all responses"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
 # Initialize database on first run
 # For PostgreSQL: Only initialize if tables don't exist
 # For SQLite on Vercel: Database is ephemeral in /tmp, will re-initialize on cold start
@@ -39,6 +47,11 @@ def index():
 @app.errorhandler(Exception)
 def handle_error(e):
     return jsonify({'error': str(e)}), 400
+
+@app.route('/<path:path>', methods=['OPTIONS'])
+def handle_options(path):
+    """Handle CORS preflight requests"""
+    return '', 204
 
 # ============================================
 # Agent Templates API
