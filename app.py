@@ -787,6 +787,57 @@ def upload_file():
         # Get the created upload
         upload = db.get_file_upload_by_id(upload_id)
         
+        # AUTO-CREATE AGENT from upload
+        agent_id = None
+        agent_slug = None
+        try:
+            # Generate slug from filename
+            import re
+            base_name = original_filename.rsplit('.', 1)[0]  # Remove extension
+            slug = re.sub(r'[^a-z0-9-]', '-', base_name.lower())
+            slug = re.sub(r'-+', '-', slug).strip('-')  # Clean up multiple dashes
+
+            # Ensure unique slug
+            counter = 1
+            original_slug = slug
+            while db.get_agent_by_slug(slug):
+                slug = f"{original_slug}-{counter}"
+                counter += 1
+
+            # Validate agent data
+            import validators
+            agent_config = {
+                'slug': slug,
+                'name': normalized_data.get('name', base_name.replace('-', ' ').title()),
+                'description': normalized_data.get('description', ''),
+                'instructions': normalized_data.get('instructions') or normalized_data.get('system_prompt', ''),
+                'tools': normalized_data.get('tools', []),
+                'skills': normalized_data.get('skills', []),
+                'default_model': normalized_data.get('default_model', 'sonnet'),
+                'max_turns': normalized_data.get('max_turns', 50),
+                'allowed_edit_patterns': normalized_data.get('allowed_edit_patterns'),
+                'metadata': {
+                    'author': normalized_data.get('author', 'Unknown'),
+                    'version': normalized_data.get('version', '1.0.0'),
+                    'source': 'upload',
+                    'original_filename': original_filename
+                },
+                'source_format': agent_format,
+                'source_file_id': upload_id
+            }
+
+            is_valid, validation_errors = validators.validate_agent(agent_config)
+            if is_valid:
+                # Create agent
+                agent_id = db.create_agent(**agent_config)
+                agent_slug = slug
+            else:
+                print(f"WARNING: Agent validation failed for upload {upload_id}: {validation_errors}")
+        except Exception as e:
+            print(f"ERROR: Failed to auto-create agent from upload {upload_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
         # Prepare response
         response = {
             'upload_id': upload_id,
@@ -796,9 +847,12 @@ def upload_file():
             'file_size': upload['file_size'],
             'upload_status': upload['upload_status'],
             'parse_result': json.loads(upload['parse_result']) if upload['parse_result'] else None,
-            'uploaded_at': upload['uploaded_at']
+            'uploaded_at': upload['uploaded_at'],
+            'agent_created': agent_id is not None,
+            'agent_id': agent_id,
+            'agent_slug': agent_slug
         }
-        
+
         return jsonify(response), 201
         
     except ValueError as e:
