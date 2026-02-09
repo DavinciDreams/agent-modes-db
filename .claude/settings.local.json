@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python -m json.tool:*)"
+    ]
+  }
+}

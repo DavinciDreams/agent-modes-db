@@ -11,6 +11,9 @@ USE_POSTGRES = bool(POSTGRES_URL)
 # Determine database file path based on environment (only for SQLite)
 # On Vercel serverless functions, only /tmp is writable
 if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+    # WARNING: /tmp is ephemeral on Vercel serverless functions
+    # Data will be lost between cold starts. Use PostgreSQL for persistence.
+    # SQLite also has concurrency issues under load.
     DB_FILE = '/tmp/modes.db'
 else:
     DB_FILE = 'agents.db'
@@ -189,9 +192,46 @@ def execute_update(conn, query, params=None):
         else:
             conn.execute(query)
 
+def tables_exist():
+    """Check if database tables already exist"""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            if USE_POSTGRES:
+                # Check if agent_templates table exists in PostgreSQL
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = 'agent_templates'
+                    );
+                """)
+                result = cursor.fetchone()
+                return result['exists'] if result else False
+            else:
+                # Check if agent_templates table exists in SQLite
+                cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='agent_templates';
+                """)
+                return cursor.fetchone() is not None
+    except Exception as e:
+        # If it's a connection error, we should fail fast and make it clear
+        error_msg = str(e).lower()
+        if 'connection' in error_msg or 'connect' in error_msg:
+            print(f"Database connection error: {e}")
+            raise  # Re-raise connection errors
+        print(f"Error checking if tables exist: {e}")
+        return False  # For other errors, assume tables don't exist
+
 def init_db():
     """Initialize database with schema and apply all migrations"""
-    with open('schema.sql', 'r') as f:
+    # Skip initialization if tables already exist (prevents re-init on every cold start)
+    if tables_exist():
+        print("Database tables already exist, skipping initialization")
+        return
+
+    schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+    with open(schema_path, 'r') as f:
         schema = f.read()
 
     # Convert schema for Postgres if needed
@@ -294,7 +334,7 @@ def apply_migration(migration_file):
     Returns:
         bool: True if migration was applied successfully
     """
-    migration_path = os.path.join('migrations', migration_file)
+    migration_path = os.path.join(os.path.dirname(__file__), 'migrations', migration_file)
     if not os.path.exists(migration_path):
         raise FileNotFoundError(f"Migration file not found: {migration_path}")
     
@@ -334,8 +374,6 @@ def convert_migration_for_postgres(migration_sql):
     # Handle ALTER TABLE ADD COLUMN for Postgres
     # Postgres doesn't support IF NOT EXISTS for ADD COLUMN
     # The execute_sql_script function handles idempotency with try-catch
-    
-    return migration_sql
     
     return migration_sql
 
@@ -482,7 +520,8 @@ def update_template(template_id, name, description, category, source_format=None
     
     # Auto-regenerate agent card for the updated template
     _generate_and_store_agent_card('template', template_id)
-    # _generate_and_store_agent_card("template", template_id)    return template_id
+    # _generate_and_store_agent_card("template", template_id)
+    return template_id
 
 def delete_template(template_id):
     """Delete template (only if not builtin)"""

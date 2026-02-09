@@ -14,11 +14,21 @@ def log_request():
     print(f"Request: {request.method} {request.path} from {request.remote_addr}")
 
 # Initialize database on first run
-# On Vercel, database is in /tmp and needs to be initialized on every cold start
-db_path = db.DB_FILE if hasattr(db, 'DB_FILE') else 'agents.db'
-if not os.path.exists(db_path):
-    db.init_db()
-    print("Database initialized with seed data")
+# For PostgreSQL: Only initialize if tables don't exist
+# For SQLite on Vercel: Database is ephemeral in /tmp, will re-initialize on cold start
+if db.USE_POSTGRES:
+    # PostgreSQL: check if tables exist
+    # Note: Race condition possible on concurrent cold starts
+    # PostgreSQL's CREATE TABLE IF NOT EXISTS in schema.sql provides protection
+    if not db.tables_exist():
+        db.init_db()
+        print("PostgreSQL database initialized with seed data")
+else:
+    # SQLite: check if file exists
+    db_path = db.DB_FILE if hasattr(db, 'DB_FILE') else 'agents.db'
+    if not os.path.exists(db_path):
+        db.init_db()
+        print("SQLite database initialized with seed data")
 
 # Serve the main page
 @app.route('/')
