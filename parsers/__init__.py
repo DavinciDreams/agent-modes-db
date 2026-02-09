@@ -54,13 +54,13 @@ class JSONParser(BaseParser):
     def parse(self, content: str) -> Dict[str, Any]:
         """
         Parse JSON content.
-        
+
         Args:
             content: JSON string to parse
-        
+
         Returns:
             dict: Parsed JSON data
-        
+
         Raises:
             ValueError: If JSON is invalid
         """
@@ -69,6 +69,13 @@ class JSONParser(BaseParser):
             data = json.loads(content)
             if not isinstance(data, dict):
                 raise ValueError("JSON content must be an object/dictionary")
+
+            # Set default values for tools and skills if not present
+            if 'tools' not in data:
+                data['tools'] = []
+            if 'skills' not in data:
+                data['skills'] = []
+
             return data
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {str(e)}")
@@ -105,13 +112,13 @@ class YAMLParser(BaseParser):
     def parse(self, content: str) -> Dict[str, Any]:
         """
         Parse YAML content.
-        
+
         Args:
             content: YAML string to parse
-        
+
         Returns:
             dict: Parsed YAML data
-        
+
         Raises:
             ValueError: If YAML is invalid
         """
@@ -120,6 +127,13 @@ class YAMLParser(BaseParser):
             data = yaml.safe_load(content)
             if not isinstance(data, dict):
                 raise ValueError("YAML content must be a dictionary/object")
+
+            # Set default values for tools and skills if not present
+            if 'tools' not in data:
+                data['tools'] = []
+            if 'skills' not in data:
+                data['skills'] = []
+
             return data
         except ImportError:
             raise ValueError("PyYAML is not installed. Install it with: pip install PyYAML")
