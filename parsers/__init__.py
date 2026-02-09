@@ -154,73 +154,139 @@ class YAMLParser(BaseParser):
 
 class MarkdownParser(BaseParser):
     """Parser for Markdown format agent definitions."""
-    
+
     def parse(self, content: str) -> Dict[str, Any]:
         """
-        Parse Markdown content with frontmatter.
-        
+        Parse Markdown content with frontmatter and structured sections.
+
         Args:
             content: Markdown string to parse
-        
+
         Returns:
-            dict: Parsed data with frontmatter as metadata and body as description
-        
+            dict: Parsed data with frontmatter and extracted sections
+
         Raises:
             ValueError: If parsing fails
         """
         try:
             # Try to parse YAML frontmatter
             import yaml
+            import re
             data = {}
-            
+
             lines = content.split('\n')
-            
+            body_start = 0
+
             # Check for YAML frontmatter (delimited by ---)
             if lines[0].strip() == '---':
                 # Find the closing ---
                 frontmatter_lines = []
-                body_lines = []
-                in_frontmatter = False
-                
+
                 for i, line in enumerate(lines[1:], 1):
                     if line.strip() == '---':
-                        in_frontmatter = True
-                        body_lines = lines[i+1:]
+                        frontmatter = '\n'.join(frontmatter_lines)
+                        data = yaml.safe_load(frontmatter) or {}
+                        body_start = i + 1
                         break
                     frontmatter_lines.append(line)
-                
-                if in_frontmatter:
-                    frontmatter = '\n'.join(frontmatter_lines)
-                    data = yaml.safe_load(frontmatter) or {}
-                    data['body'] = '\n'.join(body_lines).strip()
-                else:
-                    # No closing --- found, treat entire content as body
-                    data['body'] = content.strip()
-            else:
-                # No frontmatter, treat entire content as body
-                data['body'] = content.strip()
-            
-            # Extract name from frontmatter or generate from body
+
+            # Get body content (after frontmatter if present)
+            body_content = '\n'.join(lines[body_start:]).strip()
+            data['body'] = body_content
+
+            # Extract structured sections from markdown headings
+            sections = self._extract_sections(body_content)
+
+            # Extract name from frontmatter or first heading
             if 'name' not in data:
-                # Try to extract name from first heading
-                for line in lines:
-                    if line.startswith('#'):
-                        data['name'] = line.lstrip('#').strip()
-                        break
-                if 'name' not in data:
-                    # Use first line of body as name
-                    first_line = data.get('body', '').split('\n')[0]
-                    data['name'] = first_line[:50] + ('...' if len(first_line) > 50 else '')
-            
-            # Use body as description if not provided
+                if sections.get('title'):
+                    data['name'] = sections['title']
+                else:
+                    # Try to extract from first heading
+                    for line in lines[body_start:]:
+                        if line.startswith('#'):
+                            data['name'] = line.lstrip('#').strip()
+                            break
+
+            # Extract description
             if 'description' not in data:
-                data['description'] = data.get('body', '')
-            
+                if sections.get('description'):
+                    data['description'] = sections['description']
+                else:
+                    data['description'] = body_content[:500]
+
+            # Extract instructions
+            if 'instructions' not in data and sections.get('instructions'):
+                data['instructions'] = sections['instructions']
+
+            # Extract tools as array
+            if 'tools' not in data and sections.get('tools'):
+                data['tools'] = self._parse_list_section(sections['tools'])
+
+            # Extract skills as array
+            if 'skills' not in data and sections.get('skills'):
+                data['skills'] = self._parse_list_section(sections['skills'])
+
             return data
         except ImportError:
             raise ValueError("PyYAML is not installed. Install it with: pip install PyYAML")
         except yaml.YAMLError as e:
             raise ValueError(f"Invalid YAML in frontmatter: {str(e)}")
+
+    def _extract_sections(self, content: str) -> Dict[str, str]:
+        """Extract sections from markdown content based on headings."""
+        import re
+        sections = {}
+
+        # Split by headings (## or ###)
+        heading_pattern = re.compile(r'^(#{1,3})\s+(.+)$', re.MULTILINE)
+        parts = heading_pattern.split(content)
+
+        # First part is content before first heading (if any)
+        if parts[0].strip():
+            sections['preamble'] = parts[0].strip()
+
+        # Process heading pairs
+        current_heading = None
+        for i in range(1, len(parts), 3):
+            if i+1 < len(parts):
+                heading_text = parts[i+1].strip().lower()
+                content_text = parts[i+2].strip() if i+2 < len(parts) else ''
+
+                # Map common heading names to section keys
+                if heading_text in ['description', 'about', 'overview']:
+                    sections['description'] = content_text
+                elif heading_text in ['instructions', 'instruction', 'system prompt', 'prompt']:
+                    sections['instructions'] = content_text
+                elif heading_text in ['tools', 'tool']:
+                    sections['tools'] = content_text
+                elif heading_text in ['skills', 'skill', 'capabilities']:
+                    sections['skills'] = content_text
+                elif not sections.get('title') and parts[i].count('#') == 1:
+                    # First H1 is the title
+                    sections['title'] = parts[i+1].strip()
+
+        return sections
+
+    def _parse_list_section(self, content: str) -> list:
+        """Parse a markdown list section into an array."""
+        import re
+        items = []
+
+        # Match both - and * bullet points
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Match bullet points
+            if line.startswith('- ') or line.startswith('* '):
+                item = line[2:].strip()
+                items.append(item)
+            # Match numbered lists
+            elif re.match(r'^\d+\.\s+', line):
+                item = re.sub(r'^\d+\.\s+', '', line).strip()
+                items.append(item)
+
+        return items
     
     def validate(self, data: Dict[str, Any]) -> Tuple[bool, list]:
         """
