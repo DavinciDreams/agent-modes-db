@@ -131,17 +131,19 @@ def execute_query(conn, query, params=None):
     """
     Execute a SELECT query and return results.
     Works for both SQLite and Postgres.
-    
+
     Args:
         conn: Database connection
         query: SQL query string
         params: Query parameters (optional)
-    
+
     Returns:
         Result of fetchall() for SELECT queries
     """
     if USE_POSTGRES:
-        cursor = conn.cursor()
+        # Explicitly pass RealDictCursor to ensure dict-like rows
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(query, params or ())
         return cursor.fetchall()
     else:

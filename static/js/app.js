@@ -852,17 +852,34 @@ async function uploadFiles() {
 
 async function loadRecentUploads() {
     try {
+        console.log('Loading recent uploads...');
         const response = await fetch('/api/files');
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
         const data = await response.json();
+        console.log('Received uploads data:', data);
+        console.log('Number of uploads:', data.uploads?.length || 0);
+
         renderRecentUploads(data.uploads || []);
     } catch (error) {
         console.error('Error loading uploads:', error);
+        showToast('Failed to load recent uploads: ' + error.message, 'danger');
     }
 }
 
 function renderRecentUploads(uploads) {
     const tbody = document.querySelector('#recentUploadsTable tbody');
-    
+
+    // Add null check
+    if (!tbody) {
+        console.error('Recent uploads table not found in DOM');
+        showToast('Error: Upload table not found', 'danger');
+        return;
+    }
+
     if (uploads.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">No recent uploads</td></tr>';
         return;

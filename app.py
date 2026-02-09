@@ -591,20 +591,33 @@ def upload_multiple_files():
 def get_file_uploads():
     """
     Get all file uploads with optional filtering.
-    
+
     Query parameters:
         status: Filter by upload status (optional)
         format: Filter by file format (optional)
     """
-    status = request.args.get('status')
-    file_format = request.args.get('format')
-    
-    uploads = db.get_all_file_uploads(status=status, file_format=file_format)
-    
-    return jsonify({
-        'uploads': uploads,
-        'total': len(uploads)
-    })
+    try:
+        status = request.args.get('status')
+        file_format = request.args.get('format')
+
+        uploads = db.get_all_file_uploads(status=status, file_format=file_format)
+
+        print(f"DEBUG: Returning {len(uploads)} uploads")
+        if uploads:
+            print(f"DEBUG: First upload keys: {list(uploads[0].keys())}")
+
+        return jsonify({
+            'uploads': uploads,
+            'total': len(uploads)
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_file_uploads: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            'error': 'Failed to fetch file uploads',
+            'message': str(e)
+        }), 500
 
 
 @app.route('/api/files/<int:upload_id>', methods=['GET'])
