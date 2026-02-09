@@ -220,12 +220,18 @@ class MarkdownParser(BaseParser):
                 data['instructions'] = sections['instructions']
 
             # Extract tools as array
-            if 'tools' not in data and sections.get('tools'):
-                data['tools'] = self._parse_list_section(sections['tools'])
+            if 'tools' not in data:
+                if sections.get('tools'):
+                    data['tools'] = self._parse_list_section(sections['tools'])
+                else:
+                    data['tools'] = []  # Default to empty list when no tools section
 
             # Extract skills as array
-            if 'skills' not in data and sections.get('skills'):
-                data['skills'] = self._parse_list_section(sections['skills'])
+            if 'skills' not in data:
+                if sections.get('skills'):
+                    data['skills'] = self._parse_list_section(sections['skills'])
+                else:
+                    data['skills'] = []  # Default to empty list when no skills section
 
             return data
         except ImportError:
