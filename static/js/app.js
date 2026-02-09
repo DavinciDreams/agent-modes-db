@@ -814,7 +814,7 @@ async function uploadFiles() {
         });
 
         xhr.addEventListener('load', () => {
-            if (xhr.status === 200) {
+            if (xhr.status >= 200 && xhr.status < 300) {
                 const response = JSON.parse(xhr.responseText);
                 showToast('Files uploaded successfully!', 'success');
                 bootstrap.Modal.getInstance(document.getElementById('fileUploadModal')).hide();
