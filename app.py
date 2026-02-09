@@ -961,14 +961,77 @@ def upload_multiple_files():
                 upload_status='completed',
                 parse_result=normalized_data
             )
-            
+
+            # AUTO-CREATE AGENT from upload
+            agent_id = None
+            agent_slug = None
+            try:
+                # Generate slug from filename
+                import re
+                base_name = original_filename.rsplit('.', 1)[0]
+                slug = re.sub(r'[^a-z0-9-]', '-', base_name.lower())
+                slug = re.sub(r'-+', '-', slug).strip('-')
+
+                # Ensure unique slug
+                counter = 1
+                original_slug = slug
+                while db.get_agent_by_slug(slug):
+                    slug = f"{original_slug}-{counter}"
+                    counter += 1
+
+                # Detect agent format
+                agent_format = parsers.detect_agent_format(content)
+
+                # Build agent config
+                agent_config = {
+                    'slug': slug,
+                    'name': normalized_data.get('name', base_name.replace('-', ' ').title()),
+                    'description': normalized_data.get('description', ''),
+                    'instructions': normalized_data.get('instructions') or normalized_data.get('system_prompt', ''),
+                    'tools': normalized_data.get('tools', []),
+                    'skills': normalized_data.get('skills', []),
+                    'default_model': normalized_data.get('default_model', 'sonnet'),
+                    'max_turns': normalized_data.get('max_turns', 50),
+                    'source_format': agent_format,
+                    'source_file_id': upload_id
+                }
+
+                # Only add optional fields if they exist
+                if normalized_data.get('allowed_edit_patterns'):
+                    agent_config['allowed_edit_patterns'] = normalized_data['allowed_edit_patterns']
+
+                agent_config['metadata'] = {
+                    'author': normalized_data.get('author', 'Unknown'),
+                    'version': normalized_data.get('version', '1.0.0'),
+                    'source': 'upload',
+                    'original_filename': original_filename
+                }
+
+                # Validate agent
+                import validators
+                is_valid, validation_errors = validators.validate_agent(agent_config)
+                if is_valid:
+                    # Create agent
+                    agent_id = db.create_agent(**agent_config)
+                    agent_slug = slug
+                    print(f"✓ Auto-created agent '{slug}' (ID: {agent_id}) from upload {upload_id}")
+                else:
+                    print(f"WARNING: Agent validation failed for {original_filename}: {validation_errors[0] if validation_errors else 'Unknown'}")
+            except Exception as e:
+                print(f"ERROR: Failed to auto-create agent from {original_filename}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
             results.append({
                 'upload_id': upload_id,
                 'filename': stored_filename,
                 'original_filename': original_filename,
                 'file_format': file_format,
                 'status': 'completed',
-                'parse_result': normalized_data
+                'parse_result': normalized_data,
+                'agent_created': agent_id is not None,
+                'agent_id': agent_id,
+                'agent_slug': agent_slug
             })
             successful += 1
             
